@@ -7,16 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-
-typedef struct {
-  char* key;
-  int value;
-} SYMBOL;
-
-typedef struct {
-  int size;
-  SYMBOL* data;
-} SYMBOL_ARRAY;
+#include <ctype.h>
 
 typedef struct {
   char* type; // universal
