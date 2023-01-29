@@ -17,6 +17,9 @@
 #define A_TYPE "A_TYPE"
 #define C_TYPE_ASSIGN "C_TYPE_ASSIGN"
 #define C_TYPE_JUMP "C_TYPE_JUMP"
+#define MAX_DESTINATION_SIZE 5
+#define MAX_COMPARISON_SIZE 4
+#define MAX_JUMP_SIZE 5
 
 typedef struct {
   char* key;
@@ -67,19 +70,15 @@ void free_sym_table();
 void init_parsed_tokens(void);
 void free_parsed_tokens(TOKEN_ARRAY* token_array);
 
-// max amount needed for a c-string copy of the instruction for our tokens. 
-const int MAX_DESTINATION_SIZE = 5;
-const int MAX_COMPARISON_SIZE = 4;
-const int MAX_JUMP_SIZE = 5;
 
 // The predefined symbols.
-int MAX_TABLE_SIZE = 10;
-int MAX_TOKEN_SIZE = 10; 
+static int MAX_TABLE_SIZE = 10;
+static int MAX_TOKEN_SIZE = 10; 
 
 // Used to hanlde symbolic jumps for ROM labels. i.e., (something)...
-int LINE_COUNT = 0; 
+static int LINE_COUNT = 0; 
 // Denotes the next block of memory to store a symbolic variable at. Starts at 16; 
-int MEMORY_ADDRESS = 16;
+static int MEMORY_ADDRESS = 16;
 
 SYMBOL_ARRAY* SYM_TABLE;
 TOKEN_ARRAY* PARSED_TOKENS;
@@ -105,7 +104,7 @@ void register_labels(FILE* source) {
   while(length) {
     if (text[0] == OPEN_PAREN) {
       char* label = parse_label(text, length);
-      put_symbol(label, LINE_COUNT + 1);
+      put_symbol(label, LINE_COUNT);
       text = read_line(source);
       length = strlen(text);
       continue;
