@@ -39,7 +39,7 @@ char* build_empty_register(void);
 // transform - takes in a tagret file and a token array and writes hack instructions;
 // returns an int, 0 if failed, and other number if success. 
 int assemble(FILE* target, TOKEN_ARRAY* tokens) {
-    printf("Writing hack program");
+    printf("Writing binaries\n");
     for (int i = 0; i < tokens->size; i++) {
         char* empty_reg = build_empty_register();
         TOKEN token = tokens->data[i];
@@ -55,7 +55,7 @@ int assemble(FILE* target, TOKEN_ARRAY* tokens) {
             continue;
         }
     }
-    printf("Wrote hack file\n");
+    printf("Wrote binaries to disk\n");
     return 1;
 }
 
