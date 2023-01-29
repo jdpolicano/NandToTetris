@@ -463,41 +463,40 @@ char skip_comment(FILE* source) {
 void init_sym_table(void) {
   // initialize R reg values
   SYM_TABLE = malloc(sizeof(SYMBOL_ARRAY));
-  SYMBOL* table = malloc(sizeof(SYMBOL) * MAX_TABLE_SIZE);
+  SYM_TABLE->data = malloc(sizeof(SYMBOL) * MAX_TABLE_SIZE);
 
-  if (table == NULL || SYM_TABLE == NULL) {
+  if (SYM_TABLE == NULL || SYM_TABLE->data == NULL) {
     printf("Unable to intialize sym_table\n");
-    free(table);
     free(SYM_TABLE); 
     exit(1); 
   }
-  
-  table[0] = (SYMBOL){ "R0", 0 };
-  table[1] = (SYMBOL){ "R1", 1 };
-  table[2] = (SYMBOL){ "R2", 2 };
-  table[3] = (SYMBOL){ "R3", 3 };
-  table[4] = (SYMBOL){ "R4", 4 };
-  table[5] = (SYMBOL){ "R5", 5 };
-  table[6] = (SYMBOL){ "R6", 6 };
-  table[7] = (SYMBOL){ "R7", 7 };
-  table[8] = (SYMBOL){ "R8", 8 };
-  table[9] = (SYMBOL){ "R9", 9 };
-  table[10] = (SYMBOL){ "R10", 10 };
-  table[11] = (SYMBOL){ "R11", 11 };
-  table[12] = (SYMBOL){ "R12", 12 };
-  table[13] = (SYMBOL){ "R13", 13 };
-  table[14] = (SYMBOL){ "R14", 14 };
-  table[15] = (SYMBOL){ "R15", 15 };
-  table[16] = (SYMBOL){ "SP", 0 };
-  table[17] = (SYMBOL){ "LCL", 1 };
-  table[18] = (SYMBOL){ "ARG", 2 };
-  table[19] = (SYMBOL){ "THIS", 3 };
-  table[20] = (SYMBOL){ "THAT", 4 };
-  table[21] = (SYMBOL){ "SCREEN", 16384 };
-  table[22] = (SYMBOL){ "KBD", 24576 };
 
-  SYM_TABLE->size = 23;
-  SYM_TABLE->data = table;
+  SYM_TABLE->size = 0;
+
+  put_symbol("R0", 0);
+  put_symbol("R1", 1);
+  put_symbol("R2", 2);
+  put_symbol("R3", 3);
+  put_symbol("R4", 4);
+  put_symbol("R5", 5);
+  put_symbol("R6", 6);
+  put_symbol("R7", 7);
+  put_symbol("R8", 8);
+  put_symbol("R9", 9);
+  put_symbol("R10", 10);
+  put_symbol("R11", 11);
+  put_symbol("R12", 12);
+  put_symbol("R13", 13);
+  put_symbol("R14", 14);
+  put_symbol("R15", 15);
+  put_symbol("SP", 0);
+  put_symbol("LCL", 1);
+  put_symbol("ARG", 2);
+  put_symbol("THIS", 3);
+  put_symbol("THAT", 4);
+  put_symbol("SCREEN", 16384);
+  put_symbol("KBD", 24576);
+  
   return;
 }
 
@@ -558,6 +557,9 @@ int get_symbol(char* key)
 
 
 void put_symbol(char* key, int value) {
+  printf("Putting symbol\n");
+  printf("Max table size %i\n", MAX_TABLE_SIZE);
+  printf("current table size %i\n", SYM_TABLE->size);
   if (SYM_TABLE->size == MAX_TABLE_SIZE) {
     MAX_TABLE_SIZE *= 2;
     SYMBOL* tmp = realloc(SYM_TABLE->data, sizeof(SYMBOL) * MAX_TABLE_SIZE);
