@@ -105,12 +105,14 @@ void register_labels(FILE* source) {
     if (text[0] == OPEN_PAREN) {
       char* label = parse_label(text, length);
       put_symbol(label, LINE_COUNT);
+      free(text);
       text = read_line(source);
       length = strlen(text);
       continue;
     }
  
     LINE_COUNT++;
+    free(text);
     text = read_line(source);
     length = strlen(text);
   }
@@ -150,6 +152,7 @@ void parse_tokens(FILE* source) {
       // printf("Is areg %s\n", text);
       TOKEN new_entry = parse_a_type(text, length);
       put_token(new_entry);
+      free(text);
       text = read_line(source);
       length = strlen(text);
     }
@@ -158,6 +161,7 @@ void parse_tokens(FILE* source) {
       // printf("Is c type assign %s\n", text);
       TOKEN new_entry = parse_c_type_assignment(text, length);
       put_token(new_entry);
+      free(text);
       text = read_line(source);
       length = strlen(text);
     }
@@ -166,12 +170,14 @@ void parse_tokens(FILE* source) {
       // printf("Is c type jump %s\n", text);
       TOKEN new_entry = parse_c_type_jump(text, length);
       put_token(new_entry);
+      free(text);
       text = read_line(source);
       length = strlen(text);
     }
 
     else if (is_label(text, length)) {
       // printf("Is label.\n");
+      free(text);
       text = read_line(source);
       length = strlen(text);
     }
@@ -179,7 +185,8 @@ void parse_tokens(FILE* source) {
     else {
       // print error because soemthing fucked up...
       printf("Opps at line %s\n", text);
-      return;
+      free(text);
+      exit(1);
     }
   }
   printf("End Tokenizing\n");
@@ -362,6 +369,7 @@ char* read_line(FILE* source) {
   // check that we have not reached eof
   if (char_buffer == EOF) {
     if (feof(source)) {
+      free(text);
       return "\0"; // zero length string indicates nothing left to read;
     } else {
       printf("Error occurred in file read operation\n");
@@ -374,7 +382,7 @@ char* read_line(FILE* source) {
   // prcocess the next valid section of text;
   while (is_valid(char_buffer)) {
     // resize our buffer here if needed;
-    if (read_length == read_max) {
+    if (read_length == read_max - 1) {
       read_max *= 2;
       char* tmp = realloc(text, sizeof(char) * read_max);
       if (tmp == NULL) {
@@ -529,17 +537,16 @@ void free_parsed_tokens(TOKEN_ARRAY* token_array) {
 
 void init_parsed_tokens(void) {
   PARSED_TOKENS = malloc(sizeof(TOKEN_ARRAY));
-  TOKEN* tokens = malloc(sizeof(TOKEN) * MAX_TOKEN_SIZE);
+  PARSED_TOKENS->data = malloc(sizeof(TOKEN) * MAX_TOKEN_SIZE);
 
-  if (PARSED_TOKENS == NULL) {
+  if (PARSED_TOKENS == NULL || PARSED_TOKENS->data == NULL) {
     printf("Unable to allocate space for parsed tokens\n");
+    free(PARSED_TOKENS->data);
     free(PARSED_TOKENS);
-    free(tokens);
     exit(1);
   } 
 
   PARSED_TOKENS->size = 0;
-  PARSED_TOKENS->data = tokens; 
 }
 
 int get_symbol(char* key) 
@@ -557,9 +564,6 @@ int get_symbol(char* key)
 
 
 void put_symbol(char* key, int value) {
-  printf("Putting symbol\n");
-  printf("Max table size %i\n", MAX_TABLE_SIZE);
-  printf("current table size %i\n", SYM_TABLE->size);
   if (SYM_TABLE->size == MAX_TABLE_SIZE) {
     MAX_TABLE_SIZE *= 2;
     SYMBOL* tmp = realloc(SYM_TABLE->data, sizeof(SYMBOL) * MAX_TABLE_SIZE);
