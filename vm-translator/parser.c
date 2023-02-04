@@ -34,22 +34,28 @@ static int MAX_ARGUMENTS = 3;
 static int LINE_COUNT = 0;
 static int ARRAY_MAX_SIZE = 1000;
 static int ARRAY_LENGTH = 0;
+
+// to be shared downstream; 
 TOKEN_ARRAY* PARSED_TOKENS;
 
+// Function definitions (prototypes);
 TOKEN_ARRAY* parse(FILE* vm_code);
 void parse_line(FILE* vm_code);
+char** parse_arguments(char* line, char** container, int container_size); 
+void tokenize_statement(char* type, char* arg1, char* arg2);
 char* read_line(FILE* vm_code);
-int is_push(char* line);
-int is_pop(char* line);
-int is_math(char* line);
-int is_valid_line(char* line);
-char* alloc_arg(char* line);
+int is_push(char** arguments);
+int is_pop(char** arguments);
+int is_math(char** arguments);
+int is_valid_line(char** arguments);
+void put_token(TOKEN token);
+
+// for later processing steps and error handling...should print line num etc
 int validate_type(char* line, int line_size);
 int validate_segment(char* line, int line_size);
 int validate_index(char* line, int line_size);
-char* get_arg1(char* line, int line_size);
-char* get_arg2(char* line, int line_size);
 void init_token_array(); 
+void free_token_array();
 
 
 TOKEN_ARRAY* parse(FILE* vm_code) {
@@ -59,53 +65,81 @@ TOKEN_ARRAY* parse(FILE* vm_code) {
         parse_line(vm_code);
     }
 
+    for (int i = 0 ; i < ARRAY_LENGTH; i++) {
+        printf("Token type -> %s\n", PARSED_TOKENS->tokens[i].type);
+        printf("Token arg1 -> %s\n", PARSED_TOKENS->tokens[i].arg1);
+        printf("Token arg2 -> %s\n", PARSED_TOKENS->tokens[i].arg2);
+    }
+
     return PARSED_TOKENS;
 };
 
 // Reads in a line of text, and parses it, adding it to PARSED TOKEN if valid;  
 void parse_line(FILE* vm_code) {
     char* next_line = read_line(vm_code);
+    char* arguments[MAX_ARGUMENTS];
+    // side effect should fill our container.
+    parse_arguments(next_line, arguments, MAX_ARGUMENTS);
+
+    if (!is_valid_line(arguments)) return;
+
+    // route to the appropriate handler; 
+    if (is_math(arguments)) {
+        tokenize_statement(C_MATH, arguments[0], arguments[1]);
+        return;
+    }
+
+    if (is_push(arguments)){
+        tokenize_statement(C_PUSH, arguments[1], arguments[2]);
+        return;
+    }
+
+    if (is_pop(arguments)) {
+        tokenize_statement(C_POP, arguments[1], arguments[2]);
+        return;
+    }
+    // to-do write functions for other statement types...
+
+
+    // handle syntax errors
+    printf("Error parsing with args: %s, %s, %s :: at line %i\n", arguments[0], arguments[1], arguments[2], LINE_COUNT);
+    // exit should free any memory allocated?
+    exit(1);
+    return;
+}
+
+
+char** parse_arguments(char* line, char** container, int container_size) {
     char* delimiters = " ";
-    char* toke = strtok(next_line, delimiters);
-    char** arguments = malloc(sizeof(char*) * MAX_ARGUMENTS); // three arguments max per command; 
-
-    if (!is_valid_line(toke)) return;
-
-    // fill arguments with null;
-    for (int i = 0; i < MAX_ARGUMENTS; i++) {
-        arguments[i] = NULL;
+    char* toke = strtok(line, delimiters);
+   // fill arguments with null;
+    for (int i = 0; i < container_size; i++) {
+        container[i] = NULL;
     }
     
-    // continue copying tokens into arguments until we reach null;
-    for (int i = 0; i < MAX_ARGUMENTS && toke != NULL; i++) {
+    // continue copying tokens into container until we reach null;
+    for (int i = 0; i < container_size && toke != NULL; i++) {
         char* arg = malloc(sizeof(char) * strlen(toke));
         if (arg == NULL) {
-            printf("Error parsing line %s, at line %i\n", next_line, LINE_COUNT);
+            printf("Error parsing line %s, at line %i\n", line, LINE_COUNT);
             free(toke);
             free(arg);
             exit(1);
         }
         strcpy(arg, toke);
-        arguments[i] = arg;
+        container[i] = arg;
         toke = strtok(NULL, delimiters);
     }
 
-    if (is_math(arguments)) {
-        tokenize_math_statement(arguments);
-        return;
-    }
+    return container;
+}
 
-    if (is_push(arguments)){
-        tokenize_push_statement(arguments);
-        return;
-    }
-
-    if (is_pop(arguments)) {
-        tokenize_pop_statement(arguments);
-    }
-
-    // to-do write functions for other statement types...
-    free(toke); 
+void tokenize_statement(char* type, char* arg1, char* arg2) {
+    TOKEN new_entry;
+    new_entry.type = type;
+    new_entry.arg1 = arg1;
+    new_entry.arg2 = arg2;
+    put_token(new_entry);
     return;
 }
 
@@ -135,42 +169,37 @@ char* read_line(FILE* vm_code) {
     }
 
     text[length] = '\0';
+    // I think I need this because there is both a carriage return and a newline at the end of some of the lines...
+    fgetc(vm_code);
     return text;
 }
 
-int is_math(char* line) {
+int is_math(char** arguments) {
+    if (arguments[0] == NULL) return 0;
+
     for (int i = 0; i < NUM_MATH_OPS; i++) {
-        if (strcmp(line, MATH_OPS[i]) == 0) {
+        if (strcmp(arguments[0], MATH_OPS[i]) == 0) {
             return 1;
         }
     }
     return 0;
 }
 
-int is_push(char* line) {
-    return strcmp(line, PUSH) == 0; 
+int is_push(char** arguments) {
+    if (arguments[0] == NULL) return 0;
+
+    return strcmp(arguments[0], PUSH) == 0; 
 }
 
-int is_pop(char* line) {
-    return strcmp(line, POP) == 0; 
+int is_pop(char** arguments) {
+    if (arguments[0] == NULL) return 0;
+
+    return strcmp(arguments[0], POP) == 0; 
 }
 
-int is_valid_line(char* line) {
+int is_valid_line(char** arguments) {
     // is not NULL, empty, or a comment; 
-    return line != NULL && strlen(line) && line[0] != '/';
-}
-
-char* alloc_arg(char* line) {
-    char* arg = malloc(strlen(line));
-
-    if (arg == NULL || line == NULL) {
-        printf("Error allocating memory for argument '%s' at line %i\n", line, LINE_COUNT);
-        exit(0);
-    }
-
-    strcpy(arg, line);
-
-    return line;
+    return arguments[0] != NULL && strlen(arguments[0]) && arguments[0][0] != '/';
 }
 
 void init_token_array() {
@@ -188,6 +217,34 @@ void init_token_array() {
     PARSED_TOKENS->length = 0;
     PARSED_TOKENS->tokens = tmp_data;
     return; 
+}
+
+void free_token_array() {
+    for (int i = 0; i < ARRAY_LENGTH; i++) {
+        TOKEN curr = PARSED_TOKENS->tokens[i];
+        free(curr.arg2);
+        free(curr.arg2);
+    }
+
+    free(PARSED_TOKENS->tokens);
+    free(PARSED_TOKENS);
+}
+
+void put_token(TOKEN token) {
+    if (ARRAY_LENGTH == ARRAY_MAX_SIZE) {
+        ARRAY_MAX_SIZE *= 2;
+        TOKEN* tmp = realloc(PARSED_TOKENS->tokens, sizeof(TOKEN) * ARRAY_MAX_SIZE);
+        if (tmp == NULL) {
+            printf("Unable to alloc mem for new token at line %i\n", LINE_COUNT);
+            free_token_array();
+            exit(1);
+        }
+        PARSED_TOKENS->tokens = tmp;
+    }
+
+    PARSED_TOKENS->tokens[ARRAY_LENGTH] = token;
+    ARRAY_LENGTH++;
+    return;
 }
 
 
