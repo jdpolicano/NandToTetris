@@ -44,6 +44,7 @@ void parse_line(FILE* vm_code);
 char** parse_arguments(char* line, char** container, int container_size); 
 void tokenize_statement(char* type, char* arg1, char* arg2);
 char* read_line(FILE* vm_code);
+void skip_carriage_return(FILE* vm_code);
 int is_push(char** arguments);
 int is_pop(char** arguments);
 int is_math(char** arguments);
@@ -65,12 +66,7 @@ TOKEN_ARRAY* parse(FILE* vm_code) {
         parse_line(vm_code);
     }
 
-    for (int i = 0 ; i < ARRAY_LENGTH; i++) {
-        printf("Token type -> %s\n", PARSED_TOKENS->tokens[i].type);
-        printf("Token arg1 -> %s\n", PARSED_TOKENS->tokens[i].arg1);
-        printf("Token arg2 -> %s\n", PARSED_TOKENS->tokens[i].arg2);
-    }
-
+    PARSED_TOKENS->length = ARRAY_LENGTH;
     return PARSED_TOKENS;
 };
 
@@ -136,6 +132,7 @@ char** parse_arguments(char* line, char** container, int container_size) {
 
 void tokenize_statement(char* type, char* arg1, char* arg2) {
     TOKEN new_entry;
+    new_entry.lineNum = LINE_COUNT;
     new_entry.type = type;
     new_entry.arg1 = arg1;
     new_entry.arg2 = arg2;
@@ -170,8 +167,18 @@ char* read_line(FILE* vm_code) {
 
     text[length] = '\0';
     // I think I need this because there is both a carriage return and a newline at the end of some of the lines...
-    fgetc(vm_code);
+    // looks ahead for a carriage return and moves file pointer if found after newline.
+    skip_carriage_return(vm_code);
+
     return text;
+}
+
+void skip_carriage_return(FILE* vm_code) {
+    char buffer = fgetc(vm_code);
+    if (buffer != '\r') {
+        fseek(vm_code, -1, SEEK_SET);
+    }
+    return;
 }
 
 int is_math(char** arguments) {

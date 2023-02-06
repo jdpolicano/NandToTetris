@@ -6,7 +6,19 @@
 #include <string.h>
 #include <ctype.h>
 
+// operation categories
+#define C_MATH "C_MATH"
+#define C_PUSH "C_PUSH"
+#define C_POP "C_POP"
+// to be handled later...
+#define C_LABEL "C_LABEL"
+#define C_GOTO "C_GOTO"
+#define C_FUNC "C_FUNC"
+#define C_RETURN "C_RETURN"
+#define C_CALL "C_CALL"
+
 typedef struct {
+    int lineNum;
     char* type;
     char* arg1;
     char* arg2;

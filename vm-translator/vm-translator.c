@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "parser.h"
+#include "code-writer.h"
 
 int main(int argc, char* argv[])
 {
@@ -28,6 +29,7 @@ int main(int argc, char* argv[])
     }
 
     TOKEN_ARRAY* parsed_tokens = parse(instruction_file);
+    translate(parsed_tokens, output_file);
 
     clock_t end = clock();
     double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
