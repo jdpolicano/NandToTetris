@@ -38,25 +38,27 @@ static int ARRAY_LENGTH = 0;
 // to be shared downstream; 
 TOKEN_ARRAY* PARSED_TOKENS;
 
-// Function definitions (prototypes);
+// Function definitions (prototypes) that are shared
 TOKEN_ARRAY* parse(FILE* vm_code);
-void parse_line(FILE* vm_code);
-char** parse_arguments(char* line, char** container, int container_size); 
-void tokenize_statement(char* type, char* arg1, char* arg2);
-char* read_line(FILE* vm_code);
-void skip_carriage_return(FILE* vm_code);
-int is_push(char** arguments);
-int is_pop(char** arguments);
-int is_math(char** arguments);
-int is_valid_line(char** arguments);
-void put_token(TOKEN token);
+void free_token_array();
+
+static void parse_line(FILE* vm_code);
+static char** parse_arguments(char* line, char** container, int container_size); 
+static void tokenize_statement(char* type, char* arg1, char* arg2);
+static char* read_line(FILE* vm_code);
+static void skip_carriage_return(FILE* vm_code);
+static int is_push(char** arguments);
+static int is_pop(char** arguments);
+static int is_math(char** arguments);
+static int is_valid_line(char** arguments);
+static void put_token(TOKEN token);
 
 // for later processing steps and error handling...should print line num etc
-int validate_type(char* line, int line_size);
-int validate_segment(char* line, int line_size);
-int validate_index(char* line, int line_size);
-void init_token_array(); 
-void free_token_array();
+static int validate_type(char* line, int line_size);
+static int validate_segment(char* line, int line_size);
+static int validate_index(char* line, int line_size);
+static void init_token_array(); 
+
 
 
 TOKEN_ARRAY* parse(FILE* vm_code) {
@@ -71,7 +73,7 @@ TOKEN_ARRAY* parse(FILE* vm_code) {
 };
 
 // Reads in a line of text, and parses it, adding it to PARSED TOKEN if valid;  
-void parse_line(FILE* vm_code) {
+static void parse_line(FILE* vm_code) {
     char* next_line = read_line(vm_code);
     char* arguments[MAX_ARGUMENTS];
     // side effect should fill our container.
@@ -105,7 +107,7 @@ void parse_line(FILE* vm_code) {
 }
 
 
-char** parse_arguments(char* line, char** container, int container_size) {
+static char** parse_arguments(char* line, char** container, int container_size) {
     char* delimiters = " ";
     char* toke = strtok(line, delimiters);
    // fill arguments with null;
@@ -130,7 +132,7 @@ char** parse_arguments(char* line, char** container, int container_size) {
     return container;
 }
 
-void tokenize_statement(char* type, char* arg1, char* arg2) {
+static void tokenize_statement(char* type, char* arg1, char* arg2) {
     TOKEN new_entry;
     new_entry.lineNum = LINE_COUNT;
     new_entry.type = type;
@@ -140,7 +142,7 @@ void tokenize_statement(char* type, char* arg1, char* arg2) {
     return;
 }
 
-char* read_line(FILE* vm_code) {
+static char* read_line(FILE* vm_code) {
     LINE_COUNT++;
     int max_length = 10;
     int length = 0; 
@@ -173,7 +175,7 @@ char* read_line(FILE* vm_code) {
     return text;
 }
 
-void skip_carriage_return(FILE* vm_code) {
+static void skip_carriage_return(FILE* vm_code) {
     char buffer = fgetc(vm_code);
     if (buffer != '\r') {
         fseek(vm_code, -1, SEEK_SET);
@@ -181,7 +183,7 @@ void skip_carriage_return(FILE* vm_code) {
     return;
 }
 
-int is_math(char** arguments) {
+static int is_math(char** arguments) {
     if (arguments[0] == NULL) return 0;
 
     for (int i = 0; i < NUM_MATH_OPS; i++) {
@@ -192,24 +194,24 @@ int is_math(char** arguments) {
     return 0;
 }
 
-int is_push(char** arguments) {
+static int is_push(char** arguments) {
     if (arguments[0] == NULL) return 0;
 
     return strcmp(arguments[0], PUSH) == 0; 
 }
 
-int is_pop(char** arguments) {
+static int is_pop(char** arguments) {
     if (arguments[0] == NULL) return 0;
 
     return strcmp(arguments[0], POP) == 0; 
 }
 
-int is_valid_line(char** arguments) {
+static int is_valid_line(char** arguments) {
     // is not NULL, empty, or a comment; 
     return arguments[0] != NULL && strlen(arguments[0]) && arguments[0][0] != '/';
 }
 
-void init_token_array() {
+static void init_token_array() {
     TOKEN_ARRAY* tmp_parsed = malloc(sizeof(TOKEN_ARRAY));
     TOKEN* tmp_data = malloc(sizeof(TOKEN*) * ARRAY_MAX_SIZE);
 
@@ -237,7 +239,7 @@ void free_token_array() {
     free(PARSED_TOKENS);
 }
 
-void put_token(TOKEN token) {
+static void put_token(TOKEN token) {
     if (ARRAY_LENGTH == ARRAY_MAX_SIZE) {
         ARRAY_MAX_SIZE *= 2;
         TOKEN* tmp = realloc(PARSED_TOKENS->tokens, sizeof(TOKEN) * ARRAY_MAX_SIZE);
