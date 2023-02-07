@@ -2,4 +2,4 @@ assembler
 *.hack
 assembler
 *.asm 
-
+*.out
