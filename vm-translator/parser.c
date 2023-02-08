@@ -61,6 +61,7 @@ static void init_token_array();
 
 
 
+
 TOKEN_ARRAY* parse(FILE* vm_code) {
     init_token_array();
 

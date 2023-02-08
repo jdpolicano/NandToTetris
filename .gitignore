@@ -3,3 +3,4 @@ assembler
 assembler
 *.asm 
 *.out
+.vscode
