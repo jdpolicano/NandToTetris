@@ -178,9 +178,10 @@ static char* read_line(FILE* vm_code) {
 
 static void skip_carriage_return(FILE* vm_code) {
     char buffer = fgetc(vm_code);
-    if (buffer != '\r') {
-        fseek(vm_code, -1, SEEK_SET);
+    while (buffer == '\r') {
+        buffer = fgetc(vm_code);
     }
+    fseek(vm_code, -1, SEEK_SET);
     return;
 }
 
