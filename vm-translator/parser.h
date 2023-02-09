@@ -26,9 +26,10 @@ typedef struct {
 
 typedef struct {
     int length;
+    char* file_name;
     TOKEN* tokens;
 } TOKEN_ARRAY;
 
-TOKEN_ARRAY* parse(FILE* vm_code);
+TOKEN_ARRAY* parse(FILE* vm_code, char* file_name);
 
 #endif

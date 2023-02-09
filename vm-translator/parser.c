@@ -23,6 +23,7 @@ typedef struct {
 
 typedef struct {
     int length;
+    char* file_name;
     TOKEN* tokens;
 } TOKEN_ARRAY;
 
@@ -39,7 +40,7 @@ static int ARRAY_LENGTH = 0;
 TOKEN_ARRAY* PARSED_TOKENS;
 
 // Function definitions (prototypes) that are shared
-TOKEN_ARRAY* parse(FILE* vm_code);
+TOKEN_ARRAY* parse(FILE* vm_code, char* file_name);
 void free_token_array();
 
 static void parse_line(FILE* vm_code);
@@ -62,7 +63,7 @@ static void init_token_array();
 
 
 
-TOKEN_ARRAY* parse(FILE* vm_code) {
+TOKEN_ARRAY* parse(FILE* vm_code, char* file_name) {
     init_token_array();
 
     while(!feof(vm_code)) {
@@ -70,6 +71,8 @@ TOKEN_ARRAY* parse(FILE* vm_code) {
     }
 
     PARSED_TOKENS->length = ARRAY_LENGTH;
+    PARSED_TOKENS->file_name = file_name;
+    
     return PARSED_TOKENS;
 };
 
