@@ -4,3 +4,4 @@ assembler
 *.asm 
 *.out
 .vscode
+translator

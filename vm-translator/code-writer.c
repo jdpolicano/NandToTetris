@@ -12,18 +12,26 @@ static int COMP_LT_COUNT = 1;
 // might want to ocnsider returning an integer to indicate success or failure, but for now strategy is to exit program an print error if we hit a bump.
 void translate(TOKEN_ARRAY* tokens, FILE* output_file);
 
-// Push writers
+// Identifiers 
+int is_pop(char* type);
 int is_push(char* type);
+int is_virtual(char* segement);
+int is_math(char* type);
+
+// pop writers
+void route_pop(TOKEN pop_token, char* file_name, FILE* output_file);
+void pop_virtual(char* segement, char* index, FILE* output_file);
+void pop_static(char* index, char* file_name, FILE* output_file);
+void pop_temp(char* index, FILE* output_file);
+void pop_pointer(char* index, FILE* output_file);
+// Push writers
 void route_push(TOKEN push_token, char* file_name, FILE* output_file);
 void push_constant(char* value, FILE* output_file);
 void push_virtual(char* segement, char* index, FILE* output_file);
 void push_static(char* index, char* file_name, FILE* output_file);
 void push_temp(char* index, FILE* output_file);
 void push_pointer(char* index, FILE* output_file);
-// Push identifiers
-int is_push_virtual(char* segement);
 // Maths
-int is_math(char* type);
 void route_math(TOKEN math_token, FILE* output_file);
 void add(FILE* output_file);
 void subtract(FILE* output_file);
@@ -56,16 +64,24 @@ void translate(TOKEN_ARRAY* tokens, FILE* output_file) {
             route_math(curr, output_file);
         } else if (is_push(curr.type)) {
             route_push(curr, file_name, output_file);
+        } else if (is_pop(curr.type)) {
+            route_pop(curr, file_name, output_file);
         }
     }
 }
 
-// PUSH & POP
+//////////////////////////// IDENTIFIERS ///////////////////////////
+int is_pop(char* type) {
+    return strcmp(type, C_POP) == 0;
+}
+
+
+
 int is_push(char* type) {
     return strcmp(type, C_PUSH) == 0;
 }
 
-int is_push_virtual(char* segement) {
+int is_virtual(char* segement) {
     char* virtual_addresses[] = { "this", "that", "argument", "local" };
     int num_addresses = 4;
 
@@ -78,6 +94,90 @@ int is_push_virtual(char* segement) {
     return 0; 
 }
 
+
+//////////////////////// IDENTIFIERS //////////////////////////
+//////////////////////// POP COMMANDS ////////////////////////
+void route_pop(TOKEN pop_token, char* file_name, FILE* output_file) {
+    char* segment = pop_token.arg1;
+    char* index = pop_token.arg2;
+    int lineNum = pop_token.lineNum;
+
+    if (segment == NULL || index == NULL) {
+        printf("Error in token at line %i :: expected char* but received NULL\n", lineNum);
+        exit(1); 
+    }
+
+    write_comment(output_file, pop_token);
+
+    if (is_virtual(segment)) {
+        pop_virtual(segment, index, output_file);
+    } else if (strcmp(segment, "pointer") == 0) {
+        pop_pointer(index, output_file);
+    } else if (strcmp(segment, "temp") == 0) {
+        pop_temp(index, output_file);
+    } else if (strcmp(segment, "static") == 0) {
+        pop_static(index, file_name, output_file);
+    } else {
+        printf("Error in token at line %i :: unexpected segement %s\n", lineNum, segment);
+        exit(1); 
+    }
+}
+
+void pop_virtual(char* segement, char* index, FILE* output_file) {
+       char* target;
+
+        if (strcmp(segement, "this") == 0) target = "THIS";
+        if (strcmp(segement, "that") == 0) target = "THAT";
+        if (strcmp(segement, "local") == 0) target = "LCL";
+        if (strcmp(segement, "argument") == 0) target = "ARG";
+        
+        write_address(output_file, index);  // @[index]
+        write_cpu(output_file, "D", "A"); // D=A
+        write_address(output_file, target); // @[target]
+        write_cpu(output_file, "M", "D+M"); // M=D+M
+        pop_top(output_file); // see pop routine
+        write_address(output_file, target); // @[target]
+        write_cpu(output_file, "A", "M"); // A=M
+        write_cpu(output_file, "M", "D"); // M=D
+        write_address(output_file, index);  // @[index]
+        write_cpu(output_file, "D", "A"); // D=A
+        write_address(output_file, target); // @[target]
+        write_cpu(output_file, "M", "M-D"); // M=M-D
+}
+
+void pop_pointer(char* index, FILE* output_file) {
+    char* target;
+
+    if (strcmp(index, "0") == 0) target = "THIS";
+    if (strcmp(index, "1") == 0) target = "THAT";
+
+    pop_top(output_file);
+    write_address(output_file, target); // @[target]
+    write_cpu(output_file, "M", "D"); // M=D
+}
+
+void pop_temp(char* index, FILE* output_file) {
+    int temp_address = 5 + atoi(index); // 8 temps starting from 5 index, so 12 is the max. 
+    char* temp_address_str = malloc(sizeof(char) * 10);
+    sprintf(temp_address_str, "%i", temp_address);
+
+    pop_top(output_file); // @SP // AM=M-1 // D=M 
+    write_address(output_file, temp_address_str); // @[temp + index]
+    write_cpu(output_file, "M", "D"); // M=D
+    free(temp_address_str);
+}
+
+void pop_static(char* index, char* file_name, FILE* output_file) {
+    char* static_address = malloc(sizeof(char) * 100);
+    sprintf(static_address, "%s.%s", file_name, index);
+
+    pop_top(output_file); // @SP // AM=M-1 // D=M 
+    write_address(output_file, static_address); // @[static_address]
+    write_cpu(output_file, "M", "D"); // M=D
+    free(static_address);
+}
+//////////////////////// POP COMMANDS ////////////////////////
+//////////////////////// PUSH COMMANDS ////////////////////////
 void route_push(TOKEN push_token, char* file_name, FILE* output_file) {
     char* segment = push_token.arg1;
     char* index = push_token.arg2;
@@ -90,7 +190,7 @@ void route_push(TOKEN push_token, char* file_name, FILE* output_file) {
 
     write_comment(output_file, push_token);
     
-    if (is_push_virtual(segment)) {
+    if (is_virtual(segment)) {
         push_virtual(segment, index, output_file);
     } else if (strcmp(segment, "constant") == 0) {
         push_constant(index, output_file);
@@ -106,7 +206,6 @@ void route_push(TOKEN push_token, char* file_name, FILE* output_file) {
     }
 }
 
-// Push operations
 void push_virtual(char* segement, char* index, FILE* output_file) {
     char* target;
 
@@ -159,8 +258,8 @@ void push_static(char* index, char* file_name, FILE* output_file) {
     push_top(output_file); // see push routine
     free(static_address);
 }
-
-// MATH OPERTATIONS
+//////////////////////// PUSH COMMANDS ////////////////////////
+//////////////////////// MATH OPERTATIONS /////////////////////
 int is_math(char* type) {
     return strcmp(type, C_MATH) == 0;
 }
@@ -287,9 +386,8 @@ void bit_not(FILE* output_file) {
     write_cpu(output_file, "M", "!M"); // D=!M
     increment_sp(output_file);
 }
-
-// Primitive Translations that can combine to produce simple commands;
-// Pops data off of top of stack and stores in data register;
+//////////////////////// MATH OPERTATIONS /////////////////////
+//////////////////////// PRIM OPERTATIONS /////////////////////
 void pop_top(FILE* output_file) {
     decrement_sp(output_file);
     write_cpu(output_file, "D", "M"); // D=M
@@ -349,3 +447,4 @@ void write(FILE* output_file, char* string) {
     fwrite(string, sizeof(char), strlen(string), output_file);
     return;
 }
+//////////////////////// PRIM OPERTATIONS /////////////////////
