@@ -9,6 +9,8 @@
 static int COMP_EQ_COUNT = 1;
 static int COMP_GT_COUNT = 1;
 static int COMP_LT_COUNT = 1;
+static char* CONTEXT = "GLOBAL";
+static char* FILE_NAME;
 // might want to ocnsider returning an integer to indicate success or failure, but for now strategy is to exit program an print error if we hit a bump.
 void translate(TOKEN_ARRAY* tokens, FILE* output_file);
 
@@ -17,18 +19,26 @@ int is_pop(char* type);
 int is_push(char* type);
 int is_virtual(char* segement);
 int is_math(char* type);
+int is_label(char* type);
+int is_goto(char* type);
+int is_if_goto(char* type);
+
+// branching
+void write_label(char* label, FILE* output_file);
+void write_goto(char* label, FILE* output_file);
+void write_if_goto(char* label, FILE* output_file);
 
 // pop writers
-void route_pop(TOKEN pop_token, char* file_name, FILE* output_file);
+void route_pop(TOKEN pop_token, FILE* output_file);
 void pop_virtual(char* segement, char* index, FILE* output_file);
-void pop_static(char* index, char* file_name, FILE* output_file);
+void pop_static(char* index, FILE* output_file);
 void pop_temp(char* index, FILE* output_file);
 void pop_pointer(char* index, FILE* output_file);
 // Push writers
-void route_push(TOKEN push_token, char* file_name, FILE* output_file);
+void route_push(TOKEN push_token, FILE* output_file);
 void push_constant(char* value, FILE* output_file);
 void push_virtual(char* segement, char* index, FILE* output_file);
-void push_static(char* index, char* file_name, FILE* output_file);
+void push_static(char* index, FILE* output_file);
 void push_temp(char* index, FILE* output_file);
 void push_pointer(char* index, FILE* output_file);
 // Maths
@@ -43,7 +53,8 @@ void bit_and(FILE* output_file);
 void bit_or(FILE* output_file);
 void bit_not(FILE* output_file);
 // Primitives for writing
-void push_top(FILE* output_file);
+void format_label(char* label, char* destination);
+void push_top(FILE *output_file);
 void pop_top(FILE* output_file);
 void increment_sp(FILE* output_file);
 void decrement_sp(FILE* output_file);
@@ -56,25 +67,43 @@ void write(FILE* output_file, char* string);
 
 
 void translate(TOKEN_ARRAY* tokens, FILE* output_file) {
-    char* file_name = tokens->file_name;
+    FILE_NAME = tokens->file_name;
 
     for (int i = 0; i < tokens->length; i++) {
         TOKEN curr = tokens->tokens[i];
+        printf("Token type: %s\n", curr.type);
+        printf("Token arg1: %s\n", curr.arg1);
+        printf("Token arg2: %s\n", curr.arg2);
         if (is_math(curr.type)) {
             route_math(curr, output_file);
         } else if (is_push(curr.type)) {
-            route_push(curr, file_name, output_file);
+            route_push(curr, output_file);
         } else if (is_pop(curr.type)) {
-            route_pop(curr, file_name, output_file);
+            route_pop(curr, output_file);
+        } else if (is_label(curr.type)) {
+            write_comment(output_file, curr);
+            write_label(curr.arg1, output_file);
+        } else if (is_goto(curr.type)) {
+            write_comment(output_file, curr);
+            write_goto(curr.arg1, output_file);
+        } else if (is_if_goto(curr.type)) {
+            write_comment(output_file, curr);
+            write_if_goto(curr.arg1, output_file);
+        } else {
+            printf("Error in token at line %i :: unexpected type %s\n", curr.lineNum, curr.type);
+            exit(1); 
         }
     }
 }
 
 //////////////////////////// IDENTIFIERS ///////////////////////////
+int is_math(char* type) {
+    return strcmp(type, C_MATH) == 0;
+}
+
 int is_pop(char* type) {
     return strcmp(type, C_POP) == 0;
 }
-
 
 
 int is_push(char* type) {
@@ -94,10 +123,47 @@ int is_virtual(char* segement) {
     return 0; 
 }
 
+int is_label(char* type) {
+    return strcmp(type, C_LABEL) == 0;
+}
 
+int is_goto(char* type) {
+    return strcmp(type, C_GOTO) == 0;
+}
+
+int is_if_goto(char* type) {
+    return strcmp(type, C_IF_GOTO) == 0;
+}
 //////////////////////// IDENTIFIERS //////////////////////////
+
+
+
+//////////////////////// Branching ////////////////////////
+void write_label(char* label, FILE* output_file) {
+    char formatted_label[100];
+    format_label(label, formatted_label);
+    write_template(output_file, "(%s)\n", formatted_label);
+}
+
+void write_goto(char* label, FILE* output_file) {
+    char formatted_label[100];
+    format_label(label, formatted_label);
+    write_address(output_file, formatted_label);
+    write_jump(output_file, "0", "JMP");
+}
+
+void write_if_goto(char* label, FILE* output_file) {
+    char formatted_label[100];
+    format_label(label, formatted_label);
+    pop_top(output_file);
+    write_address(output_file, formatted_label);
+    write_jump(output_file, "D", "JNE");
+}
+//////////////////////// Branching ////////////////////////
+
+
 //////////////////////// POP COMMANDS ////////////////////////
-void route_pop(TOKEN pop_token, char* file_name, FILE* output_file) {
+void route_pop(TOKEN pop_token, FILE* output_file) {
     char* segment = pop_token.arg1;
     char* index = pop_token.arg2;
     int lineNum = pop_token.lineNum;
@@ -116,7 +182,7 @@ void route_pop(TOKEN pop_token, char* file_name, FILE* output_file) {
     } else if (strcmp(segment, "temp") == 0) {
         pop_temp(index, output_file);
     } else if (strcmp(segment, "static") == 0) {
-        pop_static(index, file_name, output_file);
+        pop_static(index, output_file);
     } else {
         printf("Error in token at line %i :: unexpected segement %s\n", lineNum, segment);
         exit(1); 
@@ -167,10 +233,9 @@ void pop_temp(char* index, FILE* output_file) {
     free(temp_address_str);
 }
 
-void pop_static(char* index, char* file_name, FILE* output_file) {
+void pop_static(char* index, FILE* output_file) {
     char* static_address = malloc(sizeof(char) * 100);
-    sprintf(static_address, "%s.%s", file_name, index);
-
+    sprintf(static_address, "%s.%s", FILE_NAME, index);
     pop_top(output_file); // @SP // AM=M-1 // D=M 
     write_address(output_file, static_address); // @[static_address]
     write_cpu(output_file, "M", "D"); // M=D
@@ -178,7 +243,7 @@ void pop_static(char* index, char* file_name, FILE* output_file) {
 }
 //////////////////////// POP COMMANDS ////////////////////////
 //////////////////////// PUSH COMMANDS ////////////////////////
-void route_push(TOKEN push_token, char* file_name, FILE* output_file) {
+void route_push(TOKEN push_token, FILE* output_file) {
     char* segment = push_token.arg1;
     char* index = push_token.arg2;
     int lineNum = push_token.lineNum;
@@ -199,7 +264,7 @@ void route_push(TOKEN push_token, char* file_name, FILE* output_file) {
     } else if (strcmp(segment, "temp") == 0) {
         push_temp(index, output_file);
     } else if (strcmp(segment, "static") == 0) {
-        push_static(index, file_name, output_file);
+        push_static(index, output_file);
     } else {
         printf("Error in token at line %i :: unexpected segement %s\n", lineNum, segment);
         exit(1); 
@@ -250,20 +315,18 @@ void push_constant(char* value, FILE* output_file) {
     push_top(output_file);
 }
 
-void push_static(char* index, char* file_name, FILE* output_file) {
+void push_static(char* index, FILE* output_file) {
     char* static_address = malloc(sizeof(char) * 10);
-    sprintf(static_address, "%s.%s", file_name, index);
+    sprintf(static_address, "%s.%s", FILE_NAME, index);
     write_address(output_file, static_address); // @[static_address]
     write_cpu(output_file, "D", "M"); // D=M
     push_top(output_file); // see push routine
     free(static_address);
 }
 //////////////////////// PUSH COMMANDS ////////////////////////
-//////////////////////// MATH OPERTATIONS /////////////////////
-int is_math(char* type) {
-    return strcmp(type, C_MATH) == 0;
-}
 
+
+//////////////////////// MATH OPERTATIONS /////////////////////
 void route_math(TOKEN math_token, FILE* output_file) {
     char* operation = math_token.arg1;
 
@@ -388,6 +451,12 @@ void bit_not(FILE* output_file) {
 }
 //////////////////////// MATH OPERTATIONS /////////////////////
 //////////////////////// PRIM OPERTATIONS /////////////////////
+// takes a label and formats it using the global FILE_NAME and CONTEXT variable
+void format_label(char* label, char* destination) {
+    sprintf(destination, "%s.%s$%s", FILE_NAME, CONTEXT, label);
+}
+
+
 void pop_top(FILE* output_file) {
     decrement_sp(output_file);
     write_cpu(output_file, "D", "M"); // D=M
