@@ -54,7 +54,6 @@ static void parse_line(FILE* vm_code);
 static char** parse_arguments(char* line, char** container, int container_size); 
 static void tokenize_statement(char* type, char* arg1, char* arg2);
 static char* read_line(FILE* vm_code);
-static void skip_carriage_return(FILE* vm_code);
 static int is_push(char** arguments);
 static int is_pop(char** arguments);
 static int is_math(char** arguments);
@@ -96,7 +95,9 @@ static void parse_line(FILE* vm_code) {
     char* next_line = read_line(vm_code);
     char* arguments[MAX_ARGUMENTS];
     // side effect should fill our container.
+    printf("Line %s\n", next_line);
     parse_arguments(next_line, arguments, MAX_ARGUMENTS);
+
 
     if (!is_valid_line(arguments)) return;
 
@@ -194,46 +195,41 @@ static char* read_line(FILE* vm_code) {
     int max_length = 10;
     int length = 0; 
     char* text = malloc(max_length);
-    char buffer = fgetc(vm_code);
 
-    while(buffer != EOF && buffer != '\n' && buffer != '\r') {
-        // expand array if necessary.
-        if (length == max_length - 1) {
-            max_length *= 2;
-            char* tmp = realloc(text, sizeof(char) * max_length);
-            if (tmp == NULL) {
-                printf("Unable to allocate space for addition characters\n");
-                free(text);
-                exit(1);
+    if (text == NULL) {
+        printf("Error in alloc mem for text\n");
+        exit(1);
+    }
+
+    int c = fgetc(vm_code);
+    while (c != EOF && c != '\n') {
+        if (c != '\r') {
+            // expand array if necessary.
+            if (length == max_length - 1) {
+                max_length *= 2;
+                char* tmp = realloc(text, sizeof(char) * max_length);
+                if (tmp == NULL) {
+                    printf("Unable to allocate space for addition characters\n");
+                    free(text);
+                    exit(1);
+                }
+                text = tmp;
             }
-            text = tmp;
-        }
 
-        text[length] = buffer;
-        length++;
-        buffer = fgetc(vm_code);
+            text[length++] = c;
+        }
+        c = fgetc(vm_code);
     }
 
     text[length] = '\0';
-    // I think I need this because there is both a carriage return and a newline at the end of some of the lines...
-    // looks ahead for a carriage return and moves file pointer if found after newline.
-    skip_carriage_return(vm_code);
+
+    // Recurse if the line is empty except for the newline character.
+    if (length == 0 && c == '\n' || text[0] == '/') {
+        free(text);
+        return read_line(vm_code);
+    }
 
     return text;
-}
-
-static void skip_carriage_return(FILE* vm_code) {
-    char buffer = fgetc(vm_code);
-    while (buffer == '\r' || buffer == '\n' && buffer != EOF) {
-        buffer = fgetc(vm_code);
-    }
-
-    if (buffer == EOF) {
-        return;
-    } else {
-        fseek(vm_code, -1, SEEK_CUR);
-        return;
-    }
 }
 
 static int is_math(char** arguments) {
