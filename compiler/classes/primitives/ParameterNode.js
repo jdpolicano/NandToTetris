@@ -9,6 +9,7 @@ export default class ParameterNode {
      * @param {string} name - name of this parameter;
      */
     constructor(dataType, name) {
+        this.type = NodeConstants.PARAMETERLIST;
         this.dataType = dataType;
         this.name = name;
     }

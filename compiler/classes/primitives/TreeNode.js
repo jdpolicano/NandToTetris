@@ -1,5 +1,5 @@
 /**
- * Class representing a tree node for our given tree configuration (either CST or AST)
+ * Class representing a CST tree node
  */
 export default class TreeNode {
     constructor(type, value = null) {
@@ -10,6 +10,14 @@ export default class TreeNode {
 
     addChild(child) {
         this.children.push(child);
+    }
+
+    addMetaData(fileName, token) {
+        this._metaData = {
+            fileName: fileName,
+            lineCount: token.lineCount,
+            charCount: token.charCount
+        }
     }
 }
 

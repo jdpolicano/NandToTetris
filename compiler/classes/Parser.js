@@ -14,6 +14,7 @@ export default class CSTParser {
     // Parses a class declartion and adds it to our tree; 
     parseClass() {
         const classNode = new TreeNode(NodeConstants.CLASS);
+        classNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         classNode.addChild(this.matchKeyword(NodeConstants.CLASS));
         classNode.addChild(this.parseClassName());
         classNode.addChild(this.matchSymbol('{'));
@@ -43,6 +44,7 @@ export default class CSTParser {
 
     parseType() {
         const typeNode = new TreeNode(NodeConstants.TYPE);
+        typeNode.addMetaData(this.tokenizer.filePath, this.lookahead);
 
         if (this.lookahead.type === TokenConstants.IDENTIFIER) {
             typeNode.addChild(this.matchIdentifier());
@@ -55,6 +57,8 @@ export default class CSTParser {
 
     parseClassVarDec() {
         const classVarNode = new TreeNode(NodeConstants.CLASSVARDEC);
+        classVarNode.addMetaData(this.tokenizer.filePath, this.lookahead);
+
         classVarNode.addChild(this.matchKeywordMultiple(['static', 'field']));
         classVarNode.addChild(this.parseType());
         classVarNode.addChild(this.parseVarName());
@@ -69,6 +73,8 @@ export default class CSTParser {
 
     parseSubroutineDec() {
         const subroutineDecNode = new TreeNode(NodeConstants.SUBROUTINEDEC);
+        subroutineDecNode.addMetaData(this.tokenizer.filePath, this.lookahead);
+
         subroutineDecNode.addChild(this.matchKeywordMultiple(['constructor', 'function', 'method']));
         if (this.isVoid()) {
             subroutineDecNode.addChild(this.matchKeyword('void'));
@@ -87,6 +93,7 @@ export default class CSTParser {
 
     parseSubroutineBody() {
         const subroutineBodyNode = new TreeNode(NodeConstants.SUBROUTINEBODY);
+        subroutineBodyNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         subroutineBodyNode.addChild(this.matchSymbol('{'));
 
         while (this.isVarDec()) {
@@ -99,6 +106,8 @@ export default class CSTParser {
 
     parseVarDec() {
         const varDecNode = new TreeNode(NodeConstants.VARDEC);
+        varDecNode.addMetaData(this.tokenizer.filePath, this.lookahead);
+
         varDecNode.addChild(this.matchKeyword('var'));
         varDecNode.addChild(this.parseType());
         varDecNode.addChild(this.parseVarName());
@@ -114,6 +123,7 @@ export default class CSTParser {
 
     parseParameterList() {
         const parameterListNode = new TreeNode(NodeConstants.PARAMETERLIST);
+        parameterListNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         
         if (this.isGroupClosingTag()) {
             return parameterListNode;
@@ -132,6 +142,8 @@ export default class CSTParser {
 
     parseStatements() {
         const statementsNode = new TreeNode(NodeConstants.STATEMENTS);
+        statementsNode.addMetaData(this.tokenizer.filePath, this.lookahead);
+
         while (this.isStatement()) {
             if (this.lookahead.raw === 'let') {
                 statementsNode.addChild(this.parseLetStatement());
@@ -151,6 +163,8 @@ export default class CSTParser {
 
     parseLetStatement() {
         const letStatementNode = new TreeNode(NodeConstants.LETSTATEMENT);
+        letStatementNode.addMetaData(this.tokenizer.filePath, this.lookahead);
+
         letStatementNode.addChild(this.matchKeyword('let'));
         letStatementNode.addChild(this.parseVarName());
         // left off here ----
@@ -169,6 +183,7 @@ export default class CSTParser {
 
     parseIfStatement() {
         const ifStatementNode = new TreeNode(NodeConstants.IFSTATEMENT);
+        ifStatementNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         ifStatementNode.addChild(this.matchKeyword('if'));
         ifStatementNode.addChild(this.matchSymbol('('));
         ifStatementNode.addChild(this.parseExpression());
@@ -189,6 +204,7 @@ export default class CSTParser {
 
     parseDoStatement() {
         const doStatmentNode = new TreeNode(NodeConstants.DOSTATEMENT);
+        doStatmentNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         doStatmentNode.addChild(this.matchKeyword('do'));
         doStatmentNode.addChild(this.parseSubroutineCall());
         doStatmentNode.addChild(this.matchSymbol(';'));
@@ -197,6 +213,7 @@ export default class CSTParser {
 
     parseReturnStatement() {
         const returnStatementNode = new TreeNode(NodeConstants.RETURNSTATEMENT);
+        returnStatementNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         returnStatementNode.addChild(this.matchKeyword('return'));
 
         if (this.isTerm()) {
@@ -210,6 +227,7 @@ export default class CSTParser {
 
     parseWhileStatement() {
         const whileStatementNode = new TreeNode(NodeConstants.WHILESTATEMENT);
+        whileStatementNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         whileStatementNode.addChild(this.matchKeyword('while'));
         whileStatementNode.addChild(this.matchSymbol('('));
         whileStatementNode.addChild(this.parseExpression());
@@ -222,6 +240,7 @@ export default class CSTParser {
 
     parseExpression() {
         const expressionNode = new TreeNode(NodeConstants.EXPRESSION);
+        expressionNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         expressionNode.addChild(this.parseTerm());
 
         while (this.isOp()) {
@@ -234,6 +253,7 @@ export default class CSTParser {
 
     parseTerm() {
         const termNode = new TreeNode(NodeConstants.TERM);
+        termNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         if (this.isTerm()) {
             if (this.isIntegerConstant()) {
                 termNode.addChild(this.parseIntegerConstant());
@@ -281,6 +301,7 @@ export default class CSTParser {
 
     parseSubroutineCall() {
         const subRoutineCallNode = new TreeNode(NodeConstants.SUBROUTINECALL);
+        subRoutineCallNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         subRoutineCallNode.addChild(this.matchIdentifier());
 
         if (this.isGroup()) {
@@ -300,19 +321,22 @@ export default class CSTParser {
 
     parseUrnaryOp() {
         const urnaryOpNode = new TreeNode(NodeConstants.UNARYOP);
+        urnaryOpNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         urnaryOpNode.addChild(this.matchSymbolMultiple(['-', '~']));
         return urnaryOpNode; 
     }
 
     parseOp() {
         const opNode = new TreeNode(NodeConstants.OP);
+        opNode.addMetaData(this.tokenizer.filePath, this.lookahead);
         opNode.addChild(this.matchSymbolMultiple(['+', '-', '*', '/', '&', '|', '<', '>', '=']));
         return opNode;
     }
 
     parseExpressionList() {
         const expressionListNode = new TreeNode(NodeConstants.EXPRESSIONLIST);
-
+        expressionListNode.addMetaData(this.tokenizer.filePath, this.lookahead);
+    
         if (this.isGroupClosingTag()) {
             return expressionListNode;
 
@@ -331,6 +355,7 @@ export default class CSTParser {
     parseIntegerConstant() {
         if (this.isIntegerConstant()) {
             const integerConstantNode = new TreeNode(NodeConstants.INTEGER, this.lookahead.raw);
+            integerConstantNode.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken(); 
             return integerConstantNode;
         }
@@ -339,7 +364,8 @@ export default class CSTParser {
 
     parseStringConstant() {
         if (this.isStringConstant()) {
-            const stringConstantNode = new TreeNode(TokenConstants.STRING, this.lookahead.raw); 
+            const stringConstantNode = new TreeNode(TokenConstants.STRING, this.lookahead.raw);
+            stringConstantNode.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken();
             return stringConstantNode;
         }
@@ -350,6 +376,7 @@ export default class CSTParser {
     parseKeywordConstant() {
         if (this.isKeywordConstant()) {
             const keyWordConstantNode = new TreeNode(NodeConstants.KEYWORDCONSTANT, this.lookahead.raw);
+            keyWordConstantNode.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken(); 
             return keyWordConstantNode;
         }
@@ -448,6 +475,7 @@ export default class CSTParser {
     matchKeyword(keyword) {
         if (this.lookahead.type === NodeConstants.KEYWORD && this.lookahead.raw === keyword) {
             const node = new TreeNode(NodeConstants.KEYWORD, this.lookahead.raw);
+            node.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken();
             return node;
         }
@@ -457,6 +485,7 @@ export default class CSTParser {
     matchKeywordMultiple(keywords) {
         if (this.lookahead.type === NodeConstants.KEYWORD && keywords.some(key => this.lookahead.raw === key)) {
             const node = new TreeNode(NodeConstants.KEYWORD, this.lookahead.raw);
+            node.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken();
             return node;
         }
@@ -466,6 +495,7 @@ export default class CSTParser {
     matchSymbol(symbol) {
         if (this.lookahead.type === TokenConstants.SYMBOL && this.lookahead.raw === symbol) {
             const node = new TreeNode(TokenConstants.SYMBOL, this.lookahead.raw);
+            node.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken();
             return node;
         }
@@ -475,6 +505,7 @@ export default class CSTParser {
     matchSymbolMultiple(symbols) {
         if (this.lookahead.type === TokenConstants.SYMBOL && symbols.some(sym => this.lookahead.raw === sym)) {
             const node = new TreeNode(TokenConstants.SYMBOL, this.lookahead.raw);
+            node.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken();
             return node;
         }
@@ -484,6 +515,7 @@ export default class CSTParser {
     matchIdentifier() {
         if (this.lookahead.type === NodeConstants.IDENTIFIER) {
             const node = new TreeNode(NodeConstants.IDENTIFIER, this.lookahead.raw);
+            node.addMetaData(this.tokenizer.filePath, this.lookahead);
             this.consumeToken();
             return node;
         }

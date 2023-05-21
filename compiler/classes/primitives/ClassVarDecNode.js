@@ -3,7 +3,7 @@ import { NodeConstants } from '../../constants';
 /**
  * AST node for a classVarDec.
  */
-export default class ClassVarNode {
+export default class ClassVarDecNode {
     /**
      * @constructor
      * @param {string} varType - type of classvar, either field or static
