@@ -1,5 +1,4 @@
-import Tokenizer from "./Tokenizer.js";
-import TreeNode from "./TreeNode.js";
+import TreeNode from "./primitives/TreeNode.js";
 import { TokenConstants, NodeConstants } from '../constants.js'; 
 
 export default class CSTParser {

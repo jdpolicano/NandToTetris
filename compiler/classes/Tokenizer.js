@@ -1,4 +1,4 @@
-import Token from "./Token.js";
+import Token from "./primitives/Token.js";
 import { TokenConstants, Keywords, Symbols } from "../constants.js";
 /**
  * Main class responsible for reading a source file and breaking it into valid tokens. 
