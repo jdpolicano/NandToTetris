@@ -8,6 +8,7 @@ pub struct Cpu {
     pc: usize,
     d_reg: i16,
     a_reg: u16,
+    screen_updated: bool,
 }
 
 impl Cpu {
@@ -16,6 +17,7 @@ impl Cpu {
             pc: 0,
             d_reg: 0,
             a_reg: 0,
+            screen_updated: false,
         }
     }
 

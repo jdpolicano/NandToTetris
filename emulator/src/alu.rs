@@ -33,15 +33,11 @@ impl ALU {
     pub fn execute(&self, x: i16, y: i16) -> i16 {
         // Apply zx and nx to x input
         let x = if self.zx { 0 } else { x };
-        println!("x zx: {}", x);
         let x = if self.nx { !x } else { x };
-        println!("x zy: {}", x);
 
         // Apply zy and ny to y input
         let y = if self.zy { 0 } else { y };
-        println!("y zy: {}", y);
         let y = if self.ny { !y } else { y };
-        println!("y ny: {}", y);
 
         // Compute either addition or bitwise AND based on f
         let result = if self.f {
@@ -49,8 +45,6 @@ impl ALU {
         } else {
             x & y // Perform bitwise AND
         };
-
-        println!("result: {}", result);
 
         // Apply no to negate the output if needed
         if self.no {

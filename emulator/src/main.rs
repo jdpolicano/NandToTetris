@@ -111,7 +111,9 @@ use emulator::computer::{Computer, ComputerOptions};
 
 fn main() {
     let prog = read_prog("Prog.hack");
-    let emulator = Computer::new(ComputerOptions { max_cycles: None });
+    let emulator = Computer::new(ComputerOptions {
+        max_cycles: Some(1_000_000_000),
+    });
 
     if emulator.is_err() {
         println!("Error: {:?}", emulator.err());
@@ -120,8 +122,7 @@ fn main() {
 
     let mut emulator = emulator.unwrap();
     emulator.load_rom(prog);
-    emulator.ram[0] = 256;
-    emulator.ram[256] = 20;
+    emulator.ram[0] = 250;
     let _ = emulator.run();
     // println!("RAM[0]: {:?}", emulator.ram[0]);
     // println!("RAM[256..265]: {:?}", &emulator.ram[256..266]);
