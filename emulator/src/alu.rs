@@ -1,4 +1,5 @@
-pub struct ALU {
+#[derive(Debug, PartialEq)]
+pub struct Alu {
     zx: bool,
     nx: bool,
     zy: bool,
@@ -7,7 +8,7 @@ pub struct ALU {
     no: bool,
 }
 
-impl ALU {
+impl Alu {
     pub fn new(zx: bool, nx: bool, zy: bool, ny: bool, f: bool, no: bool) -> Self {
         Self {
             zx,
@@ -19,15 +20,14 @@ impl ALU {
         }
     }
 
-    pub fn from_bits(bits: u16) -> Self {
-        Self {
-            zx: bits & 0b100000 != 0,
-            nx: bits & 0b010000 != 0,
-            zy: bits & 0b001000 != 0,
-            ny: bits & 0b000100 != 0,
-            f: bits & 0b000010 != 0,
-            no: bits & 0b000001 != 0,
-        }
+    pub fn load_bits(&mut self, bits: u16) -> &mut Self {
+        self.zx = bits & 0b100000 != 0;
+        self.nx = bits & 0b010000 != 0;
+        self.zy = bits & 0b001000 != 0;
+        self.ny = bits & 0b000100 != 0;
+        self.f = bits & 0b000010 != 0;
+        self.no = bits & 0b000001 != 0;
+        self
     }
 
     pub fn execute(&self, x: i16, y: i16) -> i16 {
@@ -55,13 +55,19 @@ impl ALU {
     }
 }
 
+impl Default for Alu {
+    fn default() -> Self {
+        Self::new(false, false, false, false, false, false)
+    }
+}
+
 #[cfg(test)]
 pub mod unit {
     use super::*;
 
     #[test]
     fn test_alu_new() {
-        let alu = ALU::new(true, false, true, false, true, false);
+        let alu = Alu::new(true, false, true, false, true, false);
         assert_eq!(alu.zx, true);
         assert_eq!(alu.nx, false);
         assert_eq!(alu.zy, true);
@@ -72,7 +78,8 @@ pub mod unit {
 
     #[test]
     fn test_alu_from_bits() {
-        let alu = ALU::from_bits(0b101010);
+        let mut alu = Alu::new(false, false, false, false, false, false);
+        alu.load_bits(0b101010);
         assert_eq!(alu.zx, true);
         assert_eq!(alu.nx, false);
         assert_eq!(alu.zy, true);
@@ -83,43 +90,43 @@ pub mod unit {
 
     #[test]
     fn test_alu_execute_zero() {
-        let alu = ALU::new(true, false, true, false, false, false);
+        let alu = Alu::new(true, false, true, false, false, false);
         assert_eq!(alu.execute(100, 100), 0)
     }
 
     #[test]
     fn test_alu_execute_add() {
-        let alu = ALU::new(false, false, false, false, true, false);
+        let alu = Alu::new(false, false, false, false, true, false);
         assert_eq!(alu.execute(100, 100), 200)
     }
 
     #[test]
     fn test_alu_execute_and() {
-        let alu = ALU::new(false, false, false, false, false, false);
+        let alu = Alu::new(false, false, false, false, false, false);
         assert_eq!(alu.execute(0b1010, 0b1100), 0b1000)
     }
 
     #[test]
     fn test_alu_execute_not() {
-        let alu = ALU::new(false, false, false, false, false, true);
+        let alu = Alu::new(false, false, false, false, false, true);
         assert_eq!(alu.execute(0b1010, 0b1100), !0b1000)
     }
 
     #[test]
     fn test_alu_execute_negate() {
-        let alu = ALU::new(false, true, false, true, false, false);
+        let alu = Alu::new(false, true, false, true, false, false);
         assert_eq!(alu.execute(100, 100), (!100) & (!100))
     }
 
     #[test]
     fn test_alu_execute_all() {
-        let alu = ALU::new(true, true, true, true, true, true);
+        let alu = Alu::new(true, true, true, true, true, true);
         assert_eq!(alu.execute(100, 100), 1)
     }
 
     #[test]
     fn test_alu_execute_overflow() {
-        let alu = ALU::new(false, false, false, false, true, false);
+        let alu = Alu::new(false, false, false, false, true, false);
         assert_eq!(alu.execute(i16::MAX, 1), i16::MIN)
     }
 }
