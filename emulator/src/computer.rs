@@ -1,6 +1,7 @@
 use crate::chipset::Chipset;
 use crate::cpu_thread::CpuThread;
 use crate::events::{CpuThreadMessage, MainThreadMessage};
+use crate::keyboard::Keyboard;
 use crate::ram::Ram;
 use crate::screen::{Dimension, HackScreenBuffer, Scaler};
 use pixels::{Pixels, SurfaceTexture};
@@ -60,12 +61,15 @@ pub struct Computer {
     tx: Option<Sender<MainThreadMessage>>,
     cpu_thread: Option<JoinHandle<()>>,
     pixels: Option<Pixels>,
+    keyboard: Keyboard,
 }
 
 impl Computer {
     pub fn new(options: ComputerOptions) -> Self {
+        let ram = Ram::new(options.config.ram_size);
+        let keyboard = Keyboard::new(ram.clone(), options.config.keyboard_location);
         Self {
-            ram: Ram::new(options.config.ram_size),
+            ram,
             rom: vec![0; options.config.rom_size],
             max_cycles: options.max_cycles,
             constants: options.config,
@@ -75,6 +79,7 @@ impl Computer {
             rx: None,
             tx: None,
             cpu_thread: None,
+            keyboard,
         }
     }
 
@@ -205,6 +210,10 @@ impl ApplicationHandler for Computer {
                 }
 
                 self.window.as_ref().unwrap().request_redraw();
+            }
+
+            WindowEvent::KeyboardInput { event, .. } => {
+                self.keyboard.handle_event(event);
             }
 
             _ => (),

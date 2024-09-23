@@ -31,7 +31,7 @@ impl Chipset {
 
     pub fn run_next_instruction(&mut self) {
         let instruction = self.fetch_instruction();
-        // print instruction as a debug message, so a 16 bit number is printed as binary
+
         if instruction.is_address() {
             self.a_reg = instruction.inner();
             return;

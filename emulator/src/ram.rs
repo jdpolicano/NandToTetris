@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 /// a struct that represents a ram. It contains the main memory of the computer and
 /// exposes an api to read and write to it, supporting multi-threading through a
 /// Mutex.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Ram {
     memory: Arc<Mutex<Vec<i16>>>,
     size: usize,
@@ -45,5 +45,19 @@ impl Ram {
                 [start_address..start_address + slice.len()],
         );
         Ok(slice.len())
+    }
+
+    pub fn print_address(&self) {
+        let memory = self.memory.lock().unwrap();
+        println!("Memory at address {:?}", memory.as_ptr());
+    }
+}
+
+impl Clone for Ram {
+    fn clone(&self) -> Self {
+        Self {
+            memory: Arc::clone(&self.memory),
+            size: self.size,
+        }
     }
 }
