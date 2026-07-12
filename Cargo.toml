@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/hack-assembler", "crates/hack-vm-translator", "crates/hackc"]
+resolver = "3"
