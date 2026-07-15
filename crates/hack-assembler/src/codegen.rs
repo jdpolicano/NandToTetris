@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use thiserror::Error;
 
-use crate::parser::{AValue, Comp, Dest, Instruction, Jump};
+use crate::instruction::{AValue, Comp, Dest, Instruction, Jump, predefined_symbol_address};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CodegenError {
@@ -9,12 +9,6 @@ pub enum CodegenError {
     DuplicateLabel(String),
     #[error("address space exhausted while resolving `{0}`")]
     AddressOverflow(String),
-    #[error("invalid destination `{0}`")]
-    InvalidDest(String),
-    #[error("invalid computation `{0}`")]
-    InvalidComp(String),
-    #[error("invalid jump `{0}`")]
-    InvalidJump(String),
 }
 
 pub fn generate(instructions: &[Instruction]) -> Result<Vec<String>, CodegenError> {
@@ -33,12 +27,12 @@ pub fn generate(instructions: &[Instruction]) -> Result<Vec<String>, CodegenErro
             Instruction::C { dest, comp, jump } => {
                 output.push(format!(
                     "111{}{}{}",
-                    comp_bits(comp)?,
-                    dest_bits(dest.as_ref())?,
-                    jump_bits(jump.as_ref())?
+                    comp_bits(*comp),
+                    dest_bits(*dest),
+                    jump_bits(*jump)
                 ));
             }
-            Instruction::Label(_) => {}
+            Instruction::Label(_) | Instruction::Comment(_) => {}
         }
     }
 
@@ -62,6 +56,7 @@ fn collect_labels(instructions: &[Instruction]) -> Result<HashMap<String, u16>, 
                 }
                 address += 1;
             }
+            Instruction::Comment(_) => {}
         }
     }
 
@@ -76,7 +71,12 @@ fn resolve_a_value(
 ) -> Result<u16, CodegenError> {
     match value {
         AValue::Number(number) => Ok(*number),
+        AValue::Predefined(symbol) => Ok(symbol.address()),
         AValue::Symbol(symbol) => {
+            if let Some(address) = predefined_symbol_address(symbol) {
+                return Ok(address);
+            }
+
             if let Some(address) = labels.get(symbol) {
                 return Ok(*address);
             }
@@ -97,65 +97,62 @@ fn resolve_a_value(
     }
 }
 
-fn dest_bits(dest: Option<&Dest>) -> Result<&'static str, CodegenError> {
-    match dest.map(Dest::as_str) {
-        None => Ok("000"),
-        Some("M") => Ok("001"),
-        Some("D") => Ok("010"),
-        Some("MD") => Ok("011"),
-        Some("A") => Ok("100"),
-        Some("AM") => Ok("101"),
-        Some("AD") => Ok("110"),
-        Some("AMD") => Ok("111"),
-        Some(value) => Err(CodegenError::InvalidDest(value.to_string())),
+fn dest_bits(dest: Option<Dest>) -> &'static str {
+    match dest {
+        None => "000",
+        Some(Dest::M) => "001",
+        Some(Dest::D) => "010",
+        Some(Dest::MD) => "011",
+        Some(Dest::A) => "100",
+        Some(Dest::AM) => "101",
+        Some(Dest::AD) => "110",
+        Some(Dest::AMD) => "111",
     }
 }
 
-fn comp_bits(comp: &Comp) -> Result<&'static str, CodegenError> {
-    match comp.as_str() {
-        "0" => Ok("0101010"),
-        "1" => Ok("0111111"),
-        "-1" => Ok("0111010"),
-        "D" => Ok("0001100"),
-        "A" => Ok("0110000"),
-        "M" => Ok("1110000"),
-        "!D" => Ok("0001101"),
-        "!A" => Ok("0110001"),
-        "!M" => Ok("1110001"),
-        "-D" => Ok("0001111"),
-        "-A" => Ok("0110011"),
-        "-M" => Ok("1110011"),
-        "D+1" => Ok("0011111"),
-        "A+1" => Ok("0110111"),
-        "M+1" => Ok("1110111"),
-        "D-1" => Ok("0001110"),
-        "A-1" => Ok("0110010"),
-        "M-1" => Ok("1110010"),
-        "D+A" => Ok("0000010"),
-        "D+M" => Ok("1000010"),
-        "D-A" => Ok("0010011"),
-        "D-M" => Ok("1010011"),
-        "A-D" => Ok("0000111"),
-        "M-D" => Ok("1000111"),
-        "D&A" => Ok("0000000"),
-        "D&M" => Ok("1000000"),
-        "D|A" => Ok("0010101"),
-        "D|M" => Ok("1010101"),
-        value => Err(CodegenError::InvalidComp(value.to_string())),
+fn comp_bits(comp: Comp) -> &'static str {
+    match comp {
+        Comp::Zero => "0101010",
+        Comp::One => "0111111",
+        Comp::NegOne => "0111010",
+        Comp::D => "0001100",
+        Comp::A => "0110000",
+        Comp::M => "1110000",
+        Comp::NotD => "0001101",
+        Comp::NotA => "0110001",
+        Comp::NotM => "1110001",
+        Comp::NegD => "0001111",
+        Comp::NegA => "0110011",
+        Comp::NegM => "1110011",
+        Comp::DPlusOne => "0011111",
+        Comp::APlusOne => "0110111",
+        Comp::MPlusOne => "1110111",
+        Comp::DMinusOne => "0001110",
+        Comp::AMinusOne => "0110010",
+        Comp::MMinusOne => "1110010",
+        Comp::DPlusA => "0000010",
+        Comp::DPlusM => "1000010",
+        Comp::DMinusA => "0010011",
+        Comp::DMinusM => "1010011",
+        Comp::AMinusD => "0000111",
+        Comp::MMinusD => "1000111",
+        Comp::DAndA => "0000000",
+        Comp::DAndM => "1000000",
+        Comp::DOrA => "0010101",
+        Comp::DOrM => "1010101",
     }
 }
 
-fn jump_bits(jump: Option<&Jump>) -> Result<&'static str, CodegenError> {
-    match jump.map(Jump::as_str) {
-        None => Ok("000"),
-        Some("JGT") => Ok("001"),
-        Some("JEQ") => Ok("010"),
-        Some("JGE") => Ok("011"),
-        Some("JLT") => Ok("100"),
-        Some("JNE") => Ok("101"),
-        Some("JLE") => Ok("110"),
-        Some("JMP") => Ok("111"),
-        Some(value) => Err(CodegenError::InvalidJump(value.to_string())),
+fn jump_bits(jump: Option<Jump>) -> &'static str {
+    match jump {
+        None => "000",
+        Some(Jump::Jgt) => "001",
+        Some(Jump::Jeq) => "010",
+        Some(Jump::Jge) => "011",
+        Some(Jump::Jlt) => "100",
+        Some(Jump::Jne) => "101",
+        Some(Jump::Jle) => "110",
+        Some(Jump::Jmp) => "111",
     }
 }
 

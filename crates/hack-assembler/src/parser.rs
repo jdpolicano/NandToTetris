@@ -1,37 +1,8 @@
+use crate::instruction::{
+    AValue, Comp, Dest, Instruction, InstructionError, Jump, predefined_symbol, validate_symbol,
+};
 use crate::token::{Token, Tokenizer};
 use thiserror::Error;
-
-/// Parsed Hack assembly instruction.
-///
-/// Labels are retained in the parse output so codegen can resolve instruction
-/// addresses in a separate pass.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Instruction {
-    A(AValue),
-    C {
-        dest: Option<Dest>,
-        comp: Comp,
-        jump: Option<Jump>,
-    },
-    Label(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AValue {
-    /// A concrete A-instruction address, including predefined symbols.
-    Number(u16),
-    /// A user-defined label or variable reference to resolve during codegen.
-    Symbol(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dest(String);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Comp(String);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Jump(String);
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -110,7 +81,7 @@ impl<'a> Parser<'a> {
 
         self.expect(Token::CloseParen)?;
         self.expect_newline_or_end()?;
-        validate_symbol(label)?;
+        validate_symbol(label).map_err(invalid_symbol)?;
         Ok(Instruction::Label(label.to_string()))
     }
 
@@ -234,26 +205,20 @@ impl<'a> Parser<'a> {
     }
 }
 
-impl Dest {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 impl TryFrom<&str> for Dest {
     type Error = ParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "M" | "D" | "MD" | "A" | "AM" | "AD" | "AMD" => Ok(Self(value.to_string())),
+            "M" => Ok(Self::M),
+            "D" => Ok(Self::D),
+            "MD" => Ok(Self::MD),
+            "A" => Ok(Self::A),
+            "AM" => Ok(Self::AM),
+            "AD" => Ok(Self::AD),
+            "AMD" => Ok(Self::AMD),
             _ => Err(ParseError::InvalidDest(value.to_string())),
         }
-    }
-}
-
-impl Comp {
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
@@ -262,17 +227,36 @@ impl TryFrom<&str> for Comp {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "0" | "1" | "-1" | "D" | "A" | "M" | "!D" | "!A" | "!M" | "-D" | "-A" | "-M"
-            | "D+1" | "A+1" | "M+1" | "D-1" | "A-1" | "M-1" | "D+A" | "D+M" | "D-A" | "D-M"
-            | "A-D" | "M-D" | "D&A" | "D&M" | "D|A" | "D|M" => Ok(Self(value.to_string())),
+            "0" => Ok(Self::Zero),
+            "1" => Ok(Self::One),
+            "-1" => Ok(Self::NegOne),
+            "D" => Ok(Self::D),
+            "A" => Ok(Self::A),
+            "M" => Ok(Self::M),
+            "!D" => Ok(Self::NotD),
+            "!A" => Ok(Self::NotA),
+            "!M" => Ok(Self::NotM),
+            "-D" => Ok(Self::NegD),
+            "-A" => Ok(Self::NegA),
+            "-M" => Ok(Self::NegM),
+            "D+1" => Ok(Self::DPlusOne),
+            "A+1" => Ok(Self::APlusOne),
+            "M+1" => Ok(Self::MPlusOne),
+            "D-1" => Ok(Self::DMinusOne),
+            "A-1" => Ok(Self::AMinusOne),
+            "M-1" => Ok(Self::MMinusOne),
+            "D+A" => Ok(Self::DPlusA),
+            "D+M" => Ok(Self::DPlusM),
+            "D-A" => Ok(Self::DMinusA),
+            "D-M" => Ok(Self::DMinusM),
+            "A-D" => Ok(Self::AMinusD),
+            "M-D" => Ok(Self::MMinusD),
+            "D&A" => Ok(Self::DAndA),
+            "D&M" => Ok(Self::DAndM),
+            "D|A" => Ok(Self::DOrA),
+            "D|M" => Ok(Self::DOrM),
             _ => Err(ParseError::InvalidComp(value.to_string())),
         }
-    }
-}
-
-impl Jump {
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
@@ -281,7 +265,13 @@ impl TryFrom<&str> for Jump {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "JGT" | "JEQ" | "JGE" | "JLT" | "JNE" | "JLE" | "JMP" => Ok(Self(value.to_string())),
+            "JGT" => Ok(Self::Jgt),
+            "JEQ" => Ok(Self::Jeq),
+            "JGE" => Ok(Self::Jge),
+            "JLT" => Ok(Self::Jlt),
+            "JNE" => Ok(Self::Jne),
+            "JLE" => Ok(Self::Jle),
+            "JMP" => Ok(Self::Jmp),
             _ => Err(ParseError::InvalidJump(value.to_string())),
         }
     }
@@ -300,36 +290,12 @@ fn parse_a_number(value: &str) -> Result<AValue, ParseError> {
 }
 
 fn parse_a_symbol(value: &str) -> Result<AValue, ParseError> {
-    if let Some(address) = predefined_symbol_address(value) {
-        return Ok(AValue::Number(address));
+    if let Some(symbol) = predefined_symbol(value) {
+        return Ok(AValue::Predefined(symbol));
     }
 
-    validate_symbol(value)?;
+    validate_symbol(value).map_err(invalid_symbol)?;
     Ok(AValue::Symbol(value.to_string()))
-}
-
-fn predefined_symbol_address(value: &str) -> Option<u16> {
-    match value {
-        "R0" | "SP" => Some(0),
-        "R1" | "LCL" => Some(1),
-        "R2" | "ARG" => Some(2),
-        "R3" | "THIS" => Some(3),
-        "R4" | "THAT" => Some(4),
-        "R5" => Some(5),
-        "R6" => Some(6),
-        "R7" => Some(7),
-        "R8" => Some(8),
-        "R9" => Some(9),
-        "R10" => Some(10),
-        "R11" => Some(11),
-        "R12" => Some(12),
-        "R13" => Some(13),
-        "R14" => Some(14),
-        "R15" => Some(15),
-        "SCREEN" => Some(16_384),
-        "KEYBOARD" => Some(24_576),
-        _ => None,
-    }
 }
 
 fn parse_comp(value: String) -> Result<Comp, ParseError> {
@@ -383,30 +349,19 @@ fn same_token_variant(left: &Token<'_>, right: &Token<'_>) -> bool {
     std::mem::discriminant(left) == std::mem::discriminant(right)
 }
 
-fn validate_symbol(value: &str) -> Result<(), ParseError> {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return Err(ParseError::InvalidSymbol(value.to_string()));
-    };
-
-    if !is_symbol_start(first) || !chars.all(is_symbol_char) {
-        return Err(ParseError::InvalidSymbol(value.to_string()));
+fn invalid_symbol(error: InstructionError) -> ParseError {
+    match error {
+        InstructionError::InvalidSymbol(value) => ParseError::InvalidSymbol(value),
+        InstructionError::AddressOutOfRange(_) => {
+            unreachable!("symbol validation cannot produce an address error")
+        }
     }
-
-    Ok(())
-}
-
-fn is_symbol_start(value: char) -> bool {
-    value.is_ascii_alphabetic() || matches!(value, '_' | '.' | '$' | ':')
-}
-
-fn is_symbol_char(value: char) -> bool {
-    is_symbol_start(value) || value.is_ascii_digit()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instruction::PredefinedSymbol;
 
     fn parse(input: &str) -> Result<Vec<Instruction>, ParseError> {
         Parser::new(input).parse_all()
@@ -415,12 +370,29 @@ mod tests {
     #[test]
     fn parses_a_instructions() {
         assert_eq!(parse("@2"), Ok(vec![Instruction::A(AValue::Number(2))]));
-        assert_eq!(parse("@R0"), Ok(vec![Instruction::A(AValue::Number(0))]));
-        assert_eq!(parse("@R1"), Ok(vec![Instruction::A(AValue::Number(1))]));
-        assert_eq!(parse("@R15"), Ok(vec![Instruction::A(AValue::Number(15))]));
+        assert_eq!(
+            parse("@R0"),
+            Ok(vec![Instruction::A(AValue::Predefined(
+                PredefinedSymbol::R0
+            ))])
+        );
+        assert_eq!(
+            parse("@R1"),
+            Ok(vec![Instruction::A(AValue::Predefined(
+                PredefinedSymbol::R1
+            ))])
+        );
+        assert_eq!(
+            parse("@R15"),
+            Ok(vec![Instruction::A(AValue::Predefined(
+                PredefinedSymbol::R15
+            ))])
+        );
         assert_eq!(
             parse("@SCREEN"),
-            Ok(vec![Instruction::A(AValue::Number(16_384))])
+            Ok(vec![Instruction::A(AValue::Predefined(
+                PredefinedSymbol::SCREEN
+            ))])
         );
         assert_eq!(
             parse("@i"),
@@ -441,16 +413,16 @@ mod tests {
         assert_eq!(
             parse("D=A"),
             Ok(vec![Instruction::C {
-                dest: Some(Dest("D".to_string())),
-                comp: Comp("A".to_string()),
+                dest: Some(Dest::D),
+                comp: Comp::A,
                 jump: None,
             }])
         );
         assert_eq!(
             parse("M=D+1"),
             Ok(vec![Instruction::C {
-                dest: Some(Dest("M".to_string())),
-                comp: Comp("D+1".to_string()),
+                dest: Some(Dest::M),
+                comp: Comp::DPlusOne,
                 jump: None,
             }])
         );
@@ -458,23 +430,23 @@ mod tests {
             parse("0;JMP"),
             Ok(vec![Instruction::C {
                 dest: None,
-                comp: Comp("0".to_string()),
-                jump: Some(Jump("JMP".to_string())),
+                comp: Comp::Zero,
+                jump: Some(Jump::Jmp),
             }])
         );
         assert_eq!(
             parse("D;JGT"),
             Ok(vec![Instruction::C {
                 dest: None,
-                comp: Comp("D".to_string()),
-                jump: Some(Jump("JGT".to_string())),
+                comp: Comp::D,
+                jump: Some(Jump::Jgt),
             }])
         );
         assert_eq!(
             parse("AMD=D|A"),
             Ok(vec![Instruction::C {
-                dest: Some(Dest("AMD".to_string())),
-                comp: Comp("D|A".to_string()),
+                dest: Some(Dest::AMD),
+                comp: Comp::DOrA,
                 jump: None,
             }])
         );
@@ -487,8 +459,8 @@ mod tests {
             Ok(vec![
                 Instruction::A(AValue::Number(2)),
                 Instruction::C {
-                    dest: Some(Dest("D".to_string())),
-                    comp: Comp("A".to_string()),
+                    dest: Some(Dest::D),
+                    comp: Comp::A,
                     jump: None,
                 }
             ])

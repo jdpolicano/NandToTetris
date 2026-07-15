@@ -62,3 +62,53 @@ fn explains_unknown_inputs_and_unsupported_routes() {
             "unsupported compilation route: asm -> asm",
         ));
 }
+
+#[test]
+fn translates_vm_to_derived_assembly_with_static_file_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("Simple.vm");
+    fs::write(&input, "push static 3\npop temp 0\n").unwrap();
+
+    cargo_bin_cmd!("hackc")
+        .arg(&input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Simple.asm"));
+
+    assert_eq!(
+        fs::read_to_string(directory.path().join("Simple.asm")).unwrap(),
+        "// push static 3\n@Simple.3\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n// pop temp 0\n@SP\nAM=M-1\nD=M\n@R5\nM=D\n"
+    );
+}
+
+#[test]
+fn translates_vm_directly_to_hack() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("Math.vm");
+    fs::write(&input, "push constant 7\nneg\n").unwrap();
+
+    cargo_bin_cmd!("hackc")
+        .args(["--emit", "hack"])
+        .arg(&input)
+        .assert()
+        .success();
+
+    let assembly = "@7\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n@SP\nA=M-1\nM=-M\n";
+    assert_eq!(
+        fs::read_to_string(directory.path().join("Math.hack")).unwrap(),
+        hack_assembler::assemble(assembly).unwrap()
+    );
+}
+
+#[test]
+fn reports_vm_translation_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("Bad.vm");
+    fs::write(&input, "pop pointer 2\n").unwrap();
+
+    cargo_bin_cmd!("hackc")
+        .arg(&input)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid pointer index `2`"));
+}

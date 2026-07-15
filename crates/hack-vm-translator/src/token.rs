@@ -35,7 +35,7 @@ impl<'a> Display for Token<'a> {
             Self::Segment(s) => write!(f, "{}", s),
             Self::Number(num) => write!(f, "{}", num),
             Self::Unknown(word) => write!(f, "{}", word),
-            Self::Newline => write!(f, "\n"),
+            Self::Newline => writeln!(f),
         }
     }
 }

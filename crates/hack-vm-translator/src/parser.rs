@@ -1,6 +1,7 @@
 use crate::token::{Keyword, Token, Tokenizer};
 use crate::vm::{Arithmetic, Segment};
 use std::iter::Peekable;
+use std::{fmt, fmt::Display};
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -20,6 +21,16 @@ pub enum VmCommand {
     Push { segment: Segment, index: u16 },
     Pop { segment: Segment, index: u16 },
     Arithmetic(Arithmetic),
+}
+
+impl Display for VmCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Push { segment, index } => write!(f, "push {segment} {index}"),
+            Self::Pop { segment, index } => write!(f, "pop {segment} {index}"),
+            Self::Arithmetic(arithmetic) => write!(f, "{arithmetic}"),
+        }
+    }
 }
 
 pub struct Parser<'a> {
@@ -57,10 +68,10 @@ impl<'a> Parser<'a> {
             match next {
                 Token::Segment(segment) => {
                     let index = self.expect_index()?;
-                    return match keyword {
+                    match keyword {
                         Keyword::Pop => Ok(VmCommand::Pop { segment, index }),
                         Keyword::Push => Ok(VmCommand::Push { segment, index }),
-                    };
+                    }
                 }
                 _ => Err(ParseError::UnexpectedToken(next.to_string())),
             }
@@ -75,7 +86,7 @@ impl<'a> Parser<'a> {
 
     fn expect_index(&mut self) -> Result<u16, ParseError> {
         if let Some(t) = self.tokenizer.next() {
-            return match t {
+            match t {
                 Token::Number(num_str) => {
                     let index = num_str
                         .parse::<u16>()
@@ -83,7 +94,7 @@ impl<'a> Parser<'a> {
                     Ok(index)
                 }
                 _ => Err(ParseError::UnexpectedToken(t.to_string())),
-            };
+            }
         } else {
             Err(ParseError::UnexpectedEnd)
         }

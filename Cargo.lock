@@ -204,6 +204,7 @@ dependencies = [
 name = "hack-vm-translator"
 version = "0.1.0"
 dependencies = [
+ "hack-assembler",
  "thiserror",
 ]
 

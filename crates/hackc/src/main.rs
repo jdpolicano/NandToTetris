@@ -28,6 +28,7 @@ struct Args {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
+    Vm,
     Asm,
     Hack,
 }
@@ -35,6 +36,7 @@ enum Format {
 impl Format {
     fn extension(self) -> &'static str {
         match self {
+            Self::Vm => "vm",
             Self::Asm => "asm",
             Self::Hack => "hack",
         }
@@ -42,6 +44,7 @@ impl Format {
 
     fn default_emit(self) -> Format {
         match self {
+            Self::Vm => Self::Asm,
             Self::Asm => Self::Hack,
             Self::Hack => Self::Hack,
         }
@@ -58,7 +61,9 @@ impl std::fmt::Display for Format {
 enum CliError {
     #[error("cannot infer the input format from `{0}`; pass --from <format>")]
     UnknownInputFormat(PathBuf),
-    #[error("unsupported compilation route: {from} -> {emit}; asm -> hack is currently supported")]
+    #[error(
+        "unsupported compilation route: {from} -> {emit}; vm -> asm, vm -> hack, and asm -> hack are currently supported"
+    )]
     UnsupportedRoute { from: Format, emit: Format },
     #[error("unable to read `{path}`: {source}")]
     Read {
@@ -70,6 +75,18 @@ enum CliError {
         path: PathBuf,
         source: hack_assembler::AssembleError,
     },
+    #[error("unable to translate `{path}`: {source}")]
+    Translate {
+        path: PathBuf,
+        source: hack_vm_translator::TranslateError,
+    },
+    #[error("unable to assemble translated VM `{path}`: {source}")]
+    AssembleInstructions {
+        path: PathBuf,
+        source: hack_assembler::CodegenError,
+    },
+    #[error("VM input path `{0}` does not have a valid UTF-8 file stem")]
+    InvalidVmFileName(PathBuf),
     #[error("unable to write `{path}`: {source}")]
     Write {
         path: PathBuf,
@@ -79,6 +96,7 @@ enum CliError {
 
 fn infer_format(path: &Path) -> Option<Format> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "vm" => Some(Format::Vm),
         "asm" => Some(Format::Asm),
         "hack" => Some(Format::Hack),
         _ => None,
@@ -101,7 +119,10 @@ fn run(args: Args) -> Result<PathBuf, CliError> {
         .ok_or_else(|| CliError::UnknownInputFormat(args.input.clone()))?;
     let emit = args.emit.unwrap_or_else(|| from.default_emit());
 
-    if (from, emit) != (Format::Asm, Format::Hack) {
+    if !matches!(
+        (from, emit),
+        (Format::Vm, Format::Asm | Format::Hack) | (Format::Asm, Format::Hack)
+    ) {
         return Err(CliError::UnsupportedRoute { from, emit });
     }
 
@@ -109,10 +130,40 @@ fn run(args: Args) -> Result<PathBuf, CliError> {
         path: args.input.clone(),
         source,
     })?;
-    let contents = hack_assembler::assemble(&source).map_err(|source| CliError::Assemble {
-        path: args.input.clone(),
-        source,
-    })?;
+    let contents = match (from, emit) {
+        (Format::Asm, Format::Hack) => {
+            hack_assembler::assemble(&source).map_err(|source| CliError::Assemble {
+                path: args.input.clone(),
+                source,
+            })?
+        }
+        (Format::Vm, Format::Asm | Format::Hack) => {
+            let file_name = args
+                .input
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| CliError::InvalidVmFileName(args.input.clone()))?;
+            let instructions =
+                hack_vm_translator::translate(&source, file_name).map_err(|source| {
+                    CliError::Translate {
+                        path: args.input.clone(),
+                        source,
+                    }
+                })?;
+
+            if emit == Format::Asm {
+                hack_assembler::format_instructions(&instructions)
+            } else {
+                hack_assembler::assemble_instructions(&instructions).map_err(|source| {
+                    CliError::AssembleInstructions {
+                        path: args.input.clone(),
+                        source,
+                    }
+                })?
+            }
+        }
+        _ => unreachable!("supported routes were checked above"),
+    };
     let output = output_path(&args.input, args.output, emit);
     fs::write(&output, contents).map_err(|source| CliError::Write {
         path: output.clone(),
@@ -141,6 +192,7 @@ mod tests {
     #[test]
     fn infers_formats_case_insensitively() {
         assert_eq!(infer_format(Path::new("Prog.ASM")), Some(Format::Asm));
+        assert_eq!(infer_format(Path::new("Prog.VM")), Some(Format::Vm));
     }
 
     #[test]
