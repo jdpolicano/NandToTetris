@@ -11,9 +11,9 @@ pub use parser::{ParseError, Parser};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AssembleError {
-    #[error("unable to parse assembly: {0}")]
+    #[error("unable to parse assembly {0}")]
     Parse(#[from] ParseError),
-    #[error("unable to generate machine code: {0}")]
+    #[error("unable to generate machine code {0}")]
     Codegen(#[from] CodegenError),
 }
 

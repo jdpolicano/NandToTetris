@@ -1,7 +1,8 @@
 use crate::instruction::{
     AValue, Comp, Dest, Instruction, InstructionError, Jump, predefined_symbol, validate_symbol,
 };
-use crate::token::{Token, Tokenizer};
+use crate::token::Token;
+use logos::{Lexer, Logos};
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -23,14 +24,14 @@ pub enum ParseError {
 }
 
 pub struct Parser<'a> {
-    tokenizer: Tokenizer<'a>,
-    current: Option<Token<'a>>,
+    tokenizer: Lexer<'a, Token<'a>>,
+    current: Option<Result<Token<'a>, ()>>,
 }
 
 impl<'a> Parser<'a> {
     /// Creates a parser over the provided Hack assembly source.
     pub fn new(input: &'a str) -> Self {
-        let mut tokenizer = Tokenizer::new(input);
+        let mut tokenizer = Token::lexer(input);
         let current = tokenizer.next();
 
         Self { tokenizer, current }
@@ -40,10 +41,10 @@ impl<'a> Parser<'a> {
     pub fn parse_all(&mut self) -> Result<Vec<Instruction>, ParseError> {
         let mut instructions = Vec::new();
 
-        self.skip_blank_lines();
+        self.skip_to_valid_position()?;
         while self.current.is_some() {
             instructions.push(self.parse_instruction()?);
-            self.skip_blank_lines();
+            self.skip_to_valid_position()?;
         }
 
         Ok(instructions)
@@ -52,7 +53,7 @@ impl<'a> Parser<'a> {
     /// Consumes the first token of an instruction and dispatches to the
     /// grammar-specific parser for the rest of that instruction.
     fn parse_instruction(&mut self) -> Result<Instruction, ParseError> {
-        match self.advance() {
+        match self.advance()? {
             Some(Token::At) => self.parse_a_instruction(),
             Some(Token::OpenParen) => self.parse_label(),
             Some(token) => self.parse_c_instruction(token),
@@ -61,7 +62,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_a_instruction(&mut self) -> Result<Instruction, ParseError> {
-        let value = match self.advance() {
+        let value = match self.advance()? {
             Some(Token::Number(value)) => parse_a_number(value)?,
             Some(Token::Identifier(value)) => parse_a_symbol(value)?,
             Some(token) => return Err(ParseError::UnexpectedToken(token_to_string(&token))),
@@ -73,7 +74,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_label(&mut self) -> Result<Instruction, ParseError> {
-        let label = match self.advance() {
+        let label = match self.advance()? {
             Some(Token::Identifier(value)) => value,
             Some(token) => return Err(ParseError::UnexpectedToken(token_to_string(&token))),
             None => return Err(ParseError::UnexpectedEnd),
@@ -88,19 +89,20 @@ impl<'a> Parser<'a> {
     fn parse_c_instruction(&mut self, first_token: Token<'a>) -> Result<Instruction, ParseError> {
         let first = self.read_component_until_control(first_token)?;
 
-        match self.peek() {
-            Some(Token::Eq) => self.parse_assignment(first),
-            Some(Token::SemiColon) => self.parse_jump_instruction(first),
-            Some(Token::Newline) | None => self.parse_bare_comp(first),
+        match self.peek()? {
+            Some(Token::Eq) => self.parse_assignment(&first),
+            Some(Token::SemiColon) => self.parse_jump_instruction(&first),
+            Some(Token::Comment(_) | Token::Newline) | None => self.parse_bare_comp(&first),
             Some(token) => Err(ParseError::UnexpectedToken(token_to_string(token))),
         }
     }
 
-    fn parse_assignment(&mut self, dest_text: String) -> Result<Instruction, ParseError> {
-        let dest = Dest::try_from(dest_text.as_str())?;
+    fn parse_assignment(&mut self, dest_tokens: &[Token<'a>]) -> Result<Instruction, ParseError> {
+        let dest = parse_dest(dest_tokens)?;
         self.expect(Token::Eq)?;
 
-        let comp = parse_comp(self.read_remaining_component_until_control()?)?;
+        let comp_tokens = self.read_remaining_component_until_control()?;
+        let comp = parse_comp(&comp_tokens)?;
         self.expect_newline_or_end()?;
 
         Ok(Instruction::C {
@@ -110,11 +112,15 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_jump_instruction(&mut self, comp_text: String) -> Result<Instruction, ParseError> {
-        let comp = parse_comp(comp_text)?;
+    fn parse_jump_instruction(
+        &mut self,
+        comp_tokens: &[Token<'a>],
+    ) -> Result<Instruction, ParseError> {
+        let comp = parse_comp(comp_tokens)?;
         self.expect(Token::SemiColon)?;
 
-        let jump = parse_jump(self.read_remaining_component_until_control()?)?;
+        let jump_tokens = self.read_remaining_component_until_control()?;
+        let jump = parse_jump(&jump_tokens)?;
         self.expect_newline_or_end()?;
 
         Ok(Instruction::C {
@@ -124,8 +130,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_bare_comp(&mut self, comp_text: String) -> Result<Instruction, ParseError> {
-        let comp = parse_comp(comp_text)?;
+    fn parse_bare_comp(&mut self, comp_tokens: &[Token<'a>]) -> Result<Instruction, ParseError> {
+        let comp = parse_comp(comp_tokens)?;
         self.expect_newline_or_end()?;
 
         Ok(Instruction::C {
@@ -138,9 +144,8 @@ impl<'a> Parser<'a> {
     fn read_component_until_control(
         &mut self,
         first_token: Token<'a>,
-    ) -> Result<String, ParseError> {
-        let mut value = String::new();
-        push_component_token(&mut value, &first_token)?;
+    ) -> Result<Vec<Token<'a>>, ParseError> {
+        let mut value = vec![first_token];
 
         self.read_remaining_component_into(&mut value)?;
         Ok(value)
@@ -148,8 +153,8 @@ impl<'a> Parser<'a> {
 
     /// Reads a C-instruction component after a control token such as `=` or `;`
     /// has already been consumed.
-    fn read_remaining_component_until_control(&mut self) -> Result<String, ParseError> {
-        let mut value = String::new();
+    fn read_remaining_component_until_control(&mut self) -> Result<Vec<Token<'a>>, ParseError> {
+        let mut value = Vec::new();
         self.read_remaining_component_into(&mut value)?;
         Ok(value)
     }
@@ -157,15 +162,20 @@ impl<'a> Parser<'a> {
     /// Appends component tokens until a token that separates C-instruction
     /// fields is reached. Semantic validity is still checked later by
     /// `Dest`, `Comp`, and `Jump`.
-    fn read_remaining_component_into(&mut self, value: &mut String) -> Result<(), ParseError> {
-        while !matches!(
-            self.peek(),
-            Some(Token::Eq | Token::SemiColon | Token::Newline) | None
-        ) {
-            let token = self
-                .advance()
-                .expect("peek confirmed a current token exists");
-            push_component_token(value, &token)?;
+    fn read_remaining_component_into(
+        &mut self,
+        value: &mut Vec<Token<'a>>,
+    ) -> Result<(), ParseError> {
+        loop {
+            match self.peek()? {
+                Some(Token::Eq | Token::SemiColon | Token::Comment(_) | Token::Newline) | None => {
+                    break;
+                }
+                Some(_) => value.push(
+                    self.advance()?
+                        .expect("peek confirmed a current token exists"),
+                ),
+            }
         }
 
         Ok(())
@@ -173,7 +183,7 @@ impl<'a> Parser<'a> {
 
     /// Consumes the current token if it is the expected terminal variant.
     fn expect(&mut self, expected: Token<'_>) -> Result<(), ParseError> {
-        match self.advance() {
+        match self.advance()? {
             Some(token) if same_token_variant(&token, &expected) => Ok(()),
             Some(token) => Err(ParseError::UnexpectedToken(token_to_string(&token))),
             None => Err(ParseError::UnexpectedEnd),
@@ -181,27 +191,52 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_newline_or_end(&mut self) -> Result<(), ParseError> {
-        match self.advance() {
+        match self.advance()? {
+            Some(Token::Comment(_)) => self.expect_newline_or_end(),
             Some(Token::Newline) | None => Ok(()),
             Some(token) => Err(ParseError::UnexpectedToken(token_to_string(&token))),
         }
     }
 
-    fn skip_blank_lines(&mut self) {
-        while matches!(self.current.as_ref(), Some(Token::Newline)) {
-            self.advance();
+    fn skip_to_valid_position(&mut self) -> Result<(), ParseError> {
+        if self.current.as_ref().is_some_and(Result::is_err) {
+            return Err(ParseError::UnexpectedToken(
+                self.tokenizer.slice().to_string(),
+            ));
         }
+        while matches!(
+            self.current.as_ref(),
+            Some(Ok(Token::Newline)) | Some(Ok(Token::Comment(_)))
+        ) {
+            self.advance()?;
+        }
+        Ok(())
     }
 
     /// Consumes and returns the current token, then advances one token ahead.
-    fn advance(&mut self) -> Option<Token<'a>> {
+    fn advance(&mut self) -> Result<Option<Token<'a>>, ParseError> {
         let token = self.current.take();
+        if token.as_ref().is_some_and(Result::is_err) {
+            return Err(ParseError::UnexpectedToken(
+                self.tokenizer.slice().to_string(),
+            ));
+        }
         self.current = self.tokenizer.next();
-        token
+        match token {
+            Some(Ok(token)) => Ok(Some(token)),
+            None => Ok(None),
+            Some(Err(())) => unreachable!("lexer errors return before advancing"),
+        }
     }
 
-    fn peek(&self) -> Option<&Token<'a>> {
-        self.current.as_ref()
+    fn peek(&self) -> Result<Option<&Token<'a>>, ParseError> {
+        match self.current.as_ref() {
+            Some(Ok(token)) => Ok(Some(token)),
+            None => Ok(None),
+            Some(Err(())) => Err(ParseError::UnexpectedToken(
+                self.tokenizer.slice().to_string(),
+            )),
+        }
     }
 }
 
@@ -298,25 +333,73 @@ fn parse_a_symbol(value: &str) -> Result<AValue, ParseError> {
     Ok(AValue::Symbol(value.to_string()))
 }
 
-fn parse_comp(value: String) -> Result<Comp, ParseError> {
-    if value.is_empty() {
-        return Err(ParseError::InvalidComp(value));
+fn parse_dest(tokens: &[Token<'_>]) -> Result<Dest, ParseError> {
+    match tokens {
+        [Token::Identifier("M")] => Ok(Dest::M),
+        [Token::Identifier("D")] => Ok(Dest::D),
+        [Token::Identifier("MD")] => Ok(Dest::MD),
+        [Token::Identifier("A")] => Ok(Dest::A),
+        [Token::Identifier("AM")] => Ok(Dest::AM),
+        [Token::Identifier("AD")] => Ok(Dest::AD),
+        [Token::Identifier("AMD")] => Ok(Dest::AMD),
+        _ => Err(ParseError::InvalidDest(component_text(tokens))),
     }
-
-    Comp::try_from(value.as_str())
 }
 
-fn parse_jump(value: String) -> Result<Jump, ParseError> {
-    if value.is_empty() {
-        return Err(ParseError::InvalidJump(value));
-    }
+fn parse_comp(tokens: &[Token<'_>]) -> Result<Comp, ParseError> {
+    let comp = match tokens {
+        [Token::Number("0")] => Comp::Zero,
+        [Token::Number("1")] => Comp::One,
+        [Token::Minus, Token::Number("1")] => Comp::NegOne,
+        [Token::Identifier("D")] => Comp::D,
+        [Token::Identifier("A")] => Comp::A,
+        [Token::Identifier("M")] => Comp::M,
+        [Token::Not, Token::Identifier("D")] => Comp::NotD,
+        [Token::Not, Token::Identifier("A")] => Comp::NotA,
+        [Token::Not, Token::Identifier("M")] => Comp::NotM,
+        [Token::Minus, Token::Identifier("D")] => Comp::NegD,
+        [Token::Minus, Token::Identifier("A")] => Comp::NegA,
+        [Token::Minus, Token::Identifier("M")] => Comp::NegM,
+        [Token::Identifier("D"), Token::Plus, Token::Number("1")] => Comp::DPlusOne,
+        [Token::Identifier("A"), Token::Plus, Token::Number("1")] => Comp::APlusOne,
+        [Token::Identifier("M"), Token::Plus, Token::Number("1")] => Comp::MPlusOne,
+        [Token::Identifier("D"), Token::Minus, Token::Number("1")] => Comp::DMinusOne,
+        [Token::Identifier("A"), Token::Minus, Token::Number("1")] => Comp::AMinusOne,
+        [Token::Identifier("M"), Token::Minus, Token::Number("1")] => Comp::MMinusOne,
+        [Token::Identifier("D"), Token::Plus, Token::Identifier("A")] => Comp::DPlusA,
+        [Token::Identifier("D"), Token::Plus, Token::Identifier("M")] => Comp::DPlusM,
+        [Token::Identifier("D"), Token::Minus, Token::Identifier("A")] => Comp::DMinusA,
+        [Token::Identifier("D"), Token::Minus, Token::Identifier("M")] => Comp::DMinusM,
+        [Token::Identifier("A"), Token::Minus, Token::Identifier("D")] => Comp::AMinusD,
+        [Token::Identifier("M"), Token::Minus, Token::Identifier("D")] => Comp::MMinusD,
+        [Token::Identifier("D"), Token::Amp, Token::Identifier("A")] => Comp::DAndA,
+        [Token::Identifier("D"), Token::Amp, Token::Identifier("M")] => Comp::DAndM,
+        [Token::Identifier("D"), Token::Pipe, Token::Identifier("A")] => Comp::DOrA,
+        [Token::Identifier("D"), Token::Pipe, Token::Identifier("M")] => Comp::DOrM,
+        _ => return Err(ParseError::InvalidComp(component_text(tokens))),
+    };
 
-    Jump::try_from(value.as_str())
+    Ok(comp)
+}
+
+fn parse_jump(tokens: &[Token<'_>]) -> Result<Jump, ParseError> {
+    match tokens {
+        [Token::Identifier("JGT")] => Ok(Jump::Jgt),
+        [Token::Identifier("JEQ")] => Ok(Jump::Jeq),
+        [Token::Identifier("JGE")] => Ok(Jump::Jge),
+        [Token::Identifier("JLT")] => Ok(Jump::Jlt),
+        [Token::Identifier("JNE")] => Ok(Jump::Jne),
+        [Token::Identifier("JLE")] => Ok(Jump::Jle),
+        [Token::Identifier("JMP")] => Ok(Jump::Jmp),
+        _ => Err(ParseError::InvalidJump(component_text(tokens))),
+    }
 }
 
 fn token_to_string(token: &Token<'_>) -> String {
     match token {
-        Token::Number(value) | Token::Identifier(value) => value.to_string(),
+        Token::Number(value) | Token::Identifier(value) | Token::Comment(value) => {
+            value.to_string()
+        }
         Token::SemiColon => ";".to_string(),
         Token::OpenParen => "(".to_string(),
         Token::CloseParen => ")".to_string(),
@@ -326,23 +409,13 @@ fn token_to_string(token: &Token<'_>) -> String {
         Token::Pipe => "|".to_string(),
         Token::Eq => "=".to_string(),
         Token::At => "@".to_string(),
-        Token::Newline => "\\n".to_string(),
+        Token::Newline => "\n".to_string(),
+        Token::Not => "!".to_string(),
     }
 }
 
-fn push_component_token(value: &mut String, token: &Token<'_>) -> Result<(), ParseError> {
-    match token {
-        Token::Number(_)
-        | Token::Identifier(_)
-        | Token::Plus
-        | Token::Minus
-        | Token::Amp
-        | Token::Pipe => {
-            value.push_str(&token_to_string(token));
-            Ok(())
-        }
-        token => Err(ParseError::UnexpectedToken(token_to_string(token))),
-    }
+fn component_text(tokens: &[Token<'_>]) -> String {
+    tokens.iter().map(token_to_string).collect()
 }
 
 fn same_token_variant(left: &Token<'_>, right: &Token<'_>) -> bool {
@@ -468,6 +541,114 @@ mod tests {
     }
 
     #[test]
+    fn accepts_inline_comments_after_c_instructions() {
+        assert_eq!(
+            parse("D=A // copy\n0;JMP // loop\nD // bare computation\n"),
+            Ok(vec![
+                Instruction::C {
+                    dest: Some(Dest::D),
+                    comp: Comp::A,
+                    jump: None,
+                },
+                Instruction::C {
+                    dest: None,
+                    comp: Comp::Zero,
+                    jump: Some(Jump::Jmp),
+                },
+                Instruction::C {
+                    dest: None,
+                    comp: Comp::D,
+                    jump: None,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn parses_every_c_instruction_component() {
+        let destinations = [
+            Dest::M,
+            Dest::D,
+            Dest::MD,
+            Dest::A,
+            Dest::AM,
+            Dest::AD,
+            Dest::AMD,
+        ];
+        for dest in destinations {
+            assert_eq!(
+                parse(&format!("{dest}=0")),
+                Ok(vec![Instruction::C {
+                    dest: Some(dest),
+                    comp: Comp::Zero,
+                    jump: None,
+                }])
+            );
+        }
+
+        let computations = [
+            Comp::Zero,
+            Comp::One,
+            Comp::NegOne,
+            Comp::D,
+            Comp::A,
+            Comp::M,
+            Comp::NotD,
+            Comp::NotA,
+            Comp::NotM,
+            Comp::NegD,
+            Comp::NegA,
+            Comp::NegM,
+            Comp::DPlusOne,
+            Comp::APlusOne,
+            Comp::MPlusOne,
+            Comp::DMinusOne,
+            Comp::AMinusOne,
+            Comp::MMinusOne,
+            Comp::DPlusA,
+            Comp::DPlusM,
+            Comp::DMinusA,
+            Comp::DMinusM,
+            Comp::AMinusD,
+            Comp::MMinusD,
+            Comp::DAndA,
+            Comp::DAndM,
+            Comp::DOrA,
+            Comp::DOrM,
+        ];
+        for comp in computations {
+            assert_eq!(
+                parse(&comp.to_string()),
+                Ok(vec![Instruction::C {
+                    dest: None,
+                    comp,
+                    jump: None,
+                }])
+            );
+        }
+
+        let jumps = [
+            Jump::Jgt,
+            Jump::Jeq,
+            Jump::Jge,
+            Jump::Jlt,
+            Jump::Jne,
+            Jump::Jle,
+            Jump::Jmp,
+        ];
+        for jump in jumps {
+            assert_eq!(
+                parse(&format!("0;{jump}")),
+                Ok(vec![Instruction::C {
+                    dest: None,
+                    comp: Comp::Zero,
+                    jump: Some(jump),
+                }])
+            );
+        }
+    }
+
+    #[test]
     fn rejects_invalid_a_instructions() {
         assert_eq!(parse("@"), Err(ParseError::UnexpectedEnd));
         assert_eq!(
@@ -477,6 +658,10 @@ mod tests {
         assert_eq!(
             parse("@2bad"),
             Err(ParseError::InvalidSymbol("2bad".to_string()))
+        );
+        assert_eq!(
+            parse("@2?"),
+            Err(ParseError::UnexpectedToken("?".to_string()))
         );
     }
 
@@ -518,6 +703,14 @@ mod tests {
         assert_eq!(
             parse("@2 D=A"),
             Err(ParseError::UnexpectedToken("D".to_string()))
+        );
+        assert_eq!(
+            parse("D=A?"),
+            Err(ParseError::UnexpectedToken("?".to_string()))
+        );
+        assert_eq!(
+            parse("?"),
+            Err(ParseError::UnexpectedToken("?".to_string()))
         );
     }
 }

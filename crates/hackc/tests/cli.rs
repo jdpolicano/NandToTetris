@@ -13,7 +13,10 @@ fn assembles_to_a_derived_sibling_path() {
         .arg(&input)
         .assert()
         .success()
-        .stdout(predicate::str::contains("Prog.hack"));
+        .stdout(predicate::eq(format!(
+            "wrote {}\n",
+            directory.path().join("Prog.hack").display()
+        )));
 
     assert_eq!(
         fs::read_to_string(directory.path().join("Prog.hack")).unwrap(),
