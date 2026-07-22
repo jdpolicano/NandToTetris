@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use thiserror::Error;
 
-use crate::instruction::{AValue, Comp, Dest, Instruction, Jump, predefined_symbol_address};
+use crate::instruction::{
+    AValue, Comp, Dest, Instruction, Jump, PredefinedSymbol, predefined_symbol_address,
+};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CodegenError {
@@ -9,6 +11,8 @@ pub enum CodegenError {
     DuplicateLabel(String),
     #[error("address space exhausted while resolving `{0}`")]
     AddressOverflow(String),
+    #[error("variable address space exhausted while resolving `{0}`")]
+    VariableAddressSpaceExhausted(String),
 }
 
 pub fn generate(instructions: &[Instruction]) -> Result<Vec<String>, CodegenError> {
@@ -85,8 +89,8 @@ fn resolve_a_value(
                 return Ok(*address);
             }
 
-            if *next_variable_address == 32_768 {
-                return Err(CodegenError::AddressOverflow(symbol.clone()));
+            if *next_variable_address >= PredefinedSymbol::SCREEN.address() {
+                return Err(CodegenError::VariableAddressSpaceExhausted(symbol.clone()));
             }
 
             let address = *next_variable_address;
@@ -217,5 +221,36 @@ mod tests {
             generate(&instructions),
             Err(CodegenError::DuplicateLabel("LOOP".to_string()))
         );
+    }
+
+    #[test]
+    fn rejects_variables_that_would_overlap_screen_memory() {
+        let labels = HashMap::new();
+        let mut variables = HashMap::new();
+        let mut next_variable_address = PredefinedSymbol::SCREEN.address() - 1;
+
+        assert_eq!(
+            resolve_a_value(
+                &AValue::Symbol("last_variable".to_string()),
+                &labels,
+                &mut variables,
+                &mut next_variable_address,
+            ),
+            Ok(16_383)
+        );
+        assert_eq!(next_variable_address, PredefinedSymbol::SCREEN.address());
+
+        assert_eq!(
+            resolve_a_value(
+                &AValue::Symbol("overflow".to_string()),
+                &labels,
+                &mut variables,
+                &mut next_variable_address,
+            ),
+            Err(CodegenError::VariableAddressSpaceExhausted(
+                "overflow".to_string()
+            ))
+        );
+        assert!(!variables.contains_key("overflow"));
     }
 }

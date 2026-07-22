@@ -1,8 +1,9 @@
 use std::fmt::Display;
 
 use crate::vm::{Arithmetic, Segment};
+use logos::Logos;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
     Push,
     Pop,
@@ -17,13 +18,37 @@ impl Display for Keyword {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Logos, Debug, Clone, PartialEq, Eq)]
+#[logos(skip r"[^\S\n]")]
+#[logos(skip(r"//[^\n]*", allow_greedy = true))]
 pub enum Token<'a> {
+    #[token("push", |_| Keyword::Push)]
+    #[token("pop", |_| Keyword::Pop)]
     Keyword(Keyword),
+    #[token("add", |_| Arithmetic::Add)]
+    #[token("sub", |_| Arithmetic::Sub)]
+    #[token("neg", |_| Arithmetic::Neg)]
+    #[token("eq", |_| Arithmetic::Eq)]
+    #[token("lt", |_| Arithmetic::Lt)]
+    #[token("gt", |_| Arithmetic::Gt)]
+    #[token("and", |_| Arithmetic::And)]
+    #[token("or", |_| Arithmetic::Or)]
+    #[token("not", |_| Arithmetic::Not)]
     Arithmetic(Arithmetic),
+    #[token("local", |_| Segment::Local)]
+    #[token("argument", |_| Segment::Argument)]
+    #[token("this", |_| Segment::This)]
+    #[token("that", |_| Segment::That)]
+    #[token("pointer", |_| Segment::Pointer)]
+    #[token("temp", |_| Segment::Temp)]
+    #[token("constant", |_| Segment::Constant)]
+    #[token("static", |_| Segment::Static)]
     Segment(Segment),
+    #[regex("[0-9]+", |lex| lex.slice(), priority = 3)]
     Number(&'a str),
+    #[regex(r"[^\s/]+", |lex| lex.slice(), priority = 1)]
     Unknown(&'a str),
+    #[token("\n")]
     Newline,
 }
 
@@ -40,135 +65,12 @@ impl<'a> Display for Token<'a> {
     }
 }
 
-pub struct Tokenizer<'a> {
-    stream: &'a str,
-    origin: &'a str,
-}
-
-impl<'a> Tokenizer<'a> {
-    /// Creates a tokenizer that borrows slices from the original input.
-    pub fn new(stream: &'a str) -> Self {
-        Self {
-            stream,
-            origin: stream,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.stream = self.origin;
-    }
-
-    fn read_until_whitespace(&mut self) -> &'a str {
-        let skip_to_idx = self
-            .stream
-            .find(|c: char| c.is_whitespace()) // Finds the byte index of '\n'
-            .unwrap_or(self.stream.len());
-        let slice = &self.stream[..skip_to_idx];
-        self.stream = &self.stream[skip_to_idx..];
-        slice
-    }
-
-    fn on_white_space(&self) -> bool {
-        self.stream
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_whitespace() && c != '\n')
-    }
-
-    fn should_skip(&self) -> bool {
-        self.on_comment() || self.on_white_space()
-    }
-
-    fn on_comment(&self) -> bool {
-        // Find the byte index of the 2nd character ahead (0-indexed position 2)
-        let byte_end = 2.min(self.stream.len());
-        matches!(&self.stream[0..byte_end], "//")
-    }
-
-    fn skip_to_start(&mut self) {
-        while self.should_skip() {
-            if self.on_comment() {
-                self.skip_comment_text();
-            } else {
-                // It's whitespace, consume exactly one character
-                if let Some(c) = self.stream.chars().next() {
-                    self.stream = &self.stream[c.len_utf8()..];
-                }
-            }
-        }
-    }
-
-    fn skip_comment_text(&mut self) {
-        let skip_to_idx = self
-            .stream
-            .find('\n') // Finds the byte index of '\n'
-            .unwrap_or(self.stream.len());
-        self.stream = &self.stream[skip_to_idx..];
-    }
-
-    fn scan_str(&mut self) -> Option<Token<'a>> {
-        let slice = self.read_until_whitespace();
-        match slice {
-            "add" => Some(Token::Arithmetic(Arithmetic::Add)),
-            "sub" => Some(Token::Arithmetic(Arithmetic::Sub)),
-            "neg" => Some(Token::Arithmetic(Arithmetic::Neg)),
-            "eq" => Some(Token::Arithmetic(Arithmetic::Eq)),
-            "lt" => Some(Token::Arithmetic(Arithmetic::Lt)),
-            "gt" => Some(Token::Arithmetic(Arithmetic::Gt)),
-            "and" => Some(Token::Arithmetic(Arithmetic::And)),
-            "or" => Some(Token::Arithmetic(Arithmetic::Or)),
-            "not" => Some(Token::Arithmetic(Arithmetic::Not)),
-            "push" => Some(Token::Keyword(Keyword::Push)),
-            "pop" => Some(Token::Keyword(Keyword::Pop)),
-            "local" => Some(Token::Segment(Segment::Local)),
-            "pointer" => Some(Token::Segment(Segment::Pointer)),
-            "this" => Some(Token::Segment(Segment::This)),
-            "that" => Some(Token::Segment(Segment::That)),
-            "argument" => Some(Token::Segment(Segment::Argument)),
-            "temp" => Some(Token::Segment(Segment::Temp)),
-            "constant" => Some(Token::Segment(Segment::Constant)),
-            "static" => Some(Token::Segment(Segment::Static)),
-            _ => {
-                if slice.chars().all(|c| c.is_ascii_digit()) {
-                    Some(Token::Number(slice))
-                } else {
-                    Some(Token::Unknown(slice))
-                }
-            }
-        }
-    }
-}
-
-impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Token<'a>;
-
-    /// Returns the next token, skipping spaces, tabs, and comments.
-    ///
-    /// Newlines are preserved because the parser uses them as instruction
-    /// boundaries.
-    fn next(&mut self) -> Option<Self::Item> {
-        self.skip_to_start();
-
-        if self.stream.is_empty() {
-            return None;
-        }
-
-        match &self.stream[..1] {
-            "\n" => {
-                self.stream = &self.stream[1..];
-                Some(Token::Newline)
-            }
-            _ => self.scan_str(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn tokens(input: &str) -> Vec<Token<'_>> {
-        Tokenizer::new(input).collect()
+        Token::lexer(input).map(Result::unwrap).collect()
     }
 
     #[test]
@@ -307,6 +209,20 @@ mod tests {
     }
 
     #[test]
+    fn skips_an_inline_comment_without_preceding_whitespace() {
+        assert_eq!(
+            tokens("push constant 1// place 1 on the stack\nadd"),
+            vec![
+                Token::Keyword(Keyword::Push),
+                Token::Segment(Segment::Constant),
+                Token::Number("1"),
+                Token::Newline,
+                Token::Arithmetic(Arithmetic::Add),
+            ]
+        );
+    }
+
+    #[test]
     fn skips_a_full_line_comment_but_preserves_its_newline() {
         assert_eq!(
             tokens("// this is a comment\npush constant 1"),
@@ -364,34 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn reset_restarts_tokenization_from_the_beginning() {
-        let mut tokenizer = Tokenizer::new("push constant 7");
-
-        assert_eq!(tokenizer.next(), Some(Token::Keyword(Keyword::Push)));
-        assert_eq!(tokenizer.next(), Some(Token::Segment(Segment::Constant)));
-
-        tokenizer.reset();
-
-        assert_eq!(
-            tokenizer.collect::<Vec<_>>(),
-            vec![
-                Token::Keyword(Keyword::Push),
-                Token::Segment(Segment::Constant),
-                Token::Number("7"),
-            ]
-        );
-    }
-
-    #[test]
-    fn iterator_returns_none_repeatedly_after_exhaustion() {
-        let mut tokenizer = Tokenizer::new("add");
-
-        assert_eq!(tokenizer.next(), Some(Token::Arithmetic(Arithmetic::Add)));
-        assert_eq!(tokenizer.next(), None);
-        assert_eq!(tokenizer.next(), None);
-    }
-
-    #[test]
     fn token_slices_reference_the_original_input() {
         let input = String::from("push constant 123");
         let result = tokens(&input);
@@ -403,6 +291,14 @@ mod tests {
                 Token::Segment(Segment::Constant),
                 Token::Number("123"),
             ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_non_ascii_input_without_panicking() {
+        assert_eq!(
+            tokens("push 💥"),
+            vec![Token::Keyword(Keyword::Push), Token::Unknown("💥")]
         );
     }
 

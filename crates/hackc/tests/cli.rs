@@ -80,7 +80,7 @@ fn translates_vm_to_derived_assembly_with_static_file_name() {
 
     assert_eq!(
         fs::read_to_string(directory.path().join("Simple.asm")).unwrap(),
-        "// push static 3\n@Simple.3\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n// pop temp 0\n@SP\nAM=M-1\nD=M\n@R5\nM=D\n"
+        "// push static 3\n@Simple3\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n// pop temp 0\n@SP\nAM=M-1\nD=M\n@R5\nM=D\n"
     );
 }
 

@@ -9,9 +9,9 @@ Condensed from `code-review.md` and updated for the current implementation.
 - [ ] Add execution-level comparison tests for signed boundary cases such as `32767 > -1` and `-32768 < 1`.
 - [x] Prefix generated comparison labels with an internal namespace.
 - [ ] Guarantee that internal labels cannot collide with static symbols derived from filenames.
-- [ ] Make the VM tokenizer Unicode-safe; malformed non-ASCII input must return an error rather than panic.
-- [ ] Enforce one VM command per line and reject trailing arguments.
-- [ ] Stop assembler variable allocation before the `SCREEN` memory range and add a dedicated exhaustion error.
+- [x] Make the VM tokenizer Unicode-safe; malformed non-ASCII input must return an error rather than panic.
+- [x] Enforce one VM command per line and reject trailing arguments.
+- [x] Stop assembler variable allocation before the `SCREEN` memory range and add a dedicated exhaustion error.
 - [ ] Validate or collision-safely encode file stems used for static symbols.
 
 ## Diagnostics and I/O
@@ -42,6 +42,6 @@ Condensed from `code-review.md` and updated for the current implementation.
 
 - [x] Rename `CodeGen` to `Codegen`.
 - [ ] Use consistent `index`/`base` terminology in memory-access helpers.
-- [ ] Remove the commented-out parser stub.
+- [x] Remove the commented-out parser stub.
 - [ ] Improve vague error names such as `AssemblyGenError`.
 - [x] Keep the workspace manifest and lockfile committed for reproducible CLI builds.

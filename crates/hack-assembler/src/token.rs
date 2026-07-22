@@ -8,6 +8,7 @@ use logos::Logos;
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
 #[logos(extras=(usize, usize))]
 #[logos(skip r#"[^\S\n]"#)]
+#[logos(skip(r"//[^\n]*", allow_greedy = true))]
 pub enum Token<'a> {
     // any number, the parser will do overflow checking.
     #[regex("[0-9]+", |lex| lex.slice(), priority = 3)]
@@ -15,9 +16,6 @@ pub enum Token<'a> {
     // Any sequence of characters that are a valid asm symbol. The parser will figure out based on context if this is valid.
     #[regex("[_.$:a-zA-Z0-9]+", |lex| lex.slice())]
     Identifier(&'a str),
-    // Any sequence of characters that are a valid asm symbol. The parser will figure out based on context if this is valid.
-    #[regex(r"//[^\n]*", |lex| lex.slice(), allow_greedy = true)]
-    Comment(&'a str),
     #[token(";")]
     SemiColon,
     #[token("(")]
@@ -76,12 +74,10 @@ mod tests {
     #[test]
     fn keeps_newline_after_comment() -> Result<(), ()> {
         assert_eq!(
-            tokens("@2 \n// comment\nD=A")?,
+            tokens("@2 // comment\nD=A")?,
             vec![
                 Token::At,
                 Token::Number("2"),
-                Token::Newline,
-                Token::Comment("// comment"),
                 Token::Newline,
                 Token::Identifier("D"),
                 Token::Eq,

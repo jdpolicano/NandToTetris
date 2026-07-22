@@ -33,7 +33,7 @@ mod tests {
         let instructions = translate("push static 3\nneg\n", "Foo").unwrap();
         assert_eq!(
             hack_assembler::format_instructions(&instructions),
-            "// push static 3\n@Foo.3\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n// neg\n@SP\nA=M-1\nM=-M\n"
+            "// push static 3\n@Foo3\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n// neg\n@SP\nA=M-1\nM=-M\n"
         );
     }
 

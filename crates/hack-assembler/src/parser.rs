@@ -92,7 +92,7 @@ impl<'a> Parser<'a> {
         match self.peek()? {
             Some(Token::Eq) => self.parse_assignment(&first),
             Some(Token::SemiColon) => self.parse_jump_instruction(&first),
-            Some(Token::Comment(_) | Token::Newline) | None => self.parse_bare_comp(&first),
+            Some(Token::Newline) | None => self.parse_bare_comp(&first),
             Some(token) => Err(ParseError::UnexpectedToken(token_to_string(token))),
         }
     }
@@ -168,7 +168,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), ParseError> {
         loop {
             match self.peek()? {
-                Some(Token::Eq | Token::SemiColon | Token::Comment(_) | Token::Newline) | None => {
+                Some(Token::Eq | Token::SemiColon | Token::Newline) | None => {
                     break;
                 }
                 Some(_) => value.push(
@@ -192,7 +192,6 @@ impl<'a> Parser<'a> {
 
     fn expect_newline_or_end(&mut self) -> Result<(), ParseError> {
         match self.advance()? {
-            Some(Token::Comment(_)) => self.expect_newline_or_end(),
             Some(Token::Newline) | None => Ok(()),
             Some(token) => Err(ParseError::UnexpectedToken(token_to_string(&token))),
         }
@@ -204,10 +203,7 @@ impl<'a> Parser<'a> {
                 self.tokenizer.slice().to_string(),
             ));
         }
-        while matches!(
-            self.current.as_ref(),
-            Some(Ok(Token::Newline)) | Some(Ok(Token::Comment(_)))
-        ) {
+        while matches!(self.current.as_ref(), Some(Ok(Token::Newline))) {
             self.advance()?;
         }
         Ok(())
@@ -397,9 +393,7 @@ fn parse_jump(tokens: &[Token<'_>]) -> Result<Jump, ParseError> {
 
 fn token_to_string(token: &Token<'_>) -> String {
     match token {
-        Token::Number(value) | Token::Identifier(value) | Token::Comment(value) => {
-            value.to_string()
-        }
+        Token::Number(value) | Token::Identifier(value) => value.to_string(),
         Token::SemiColon => ";".to_string(),
         Token::OpenParen => "(".to_string(),
         Token::CloseParen => ")".to_string(),
@@ -543,7 +537,7 @@ mod tests {
     #[test]
     fn accepts_inline_comments_after_c_instructions() {
         assert_eq!(
-            parse("D=A // copy\n0;JMP // loop\nD // bare computation\n"),
+            parse("D=A// copy\n0;JMP // loop\nD // bare computation\n"),
             Ok(vec![
                 Instruction::C {
                     dest: Some(Dest::D),

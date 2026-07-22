@@ -264,7 +264,7 @@ fn temp_symbol(index: u16) -> Result<PredefinedSymbol, CodegenError> {
 }
 
 fn static_symbol(file_name: &str, index: u16) -> Result<AValue, CodegenError> {
-    match Instruction::a_symbol(format!("{file_name}.{index}"))? {
+    match Instruction::a_symbol(format!("{file_name}{index}"))? {
         Instruction::A(value) => Ok(value),
         _ => unreachable!("Instruction::a_symbol always constructs an A-instruction"),
     }
@@ -302,10 +302,10 @@ fn unary_arithmetic(op: Comp) -> Vec<Instruction> {
 * perfoms x comp y and handles overflow issues
 */
 fn signed_comparison(id: usize, comparison: Jump) -> Result<Vec<Instruction>, CodegenError> {
-    let x_is_neg = format_hack_label(&format!("CMP_X_IS_NEG.{}", id));
-    let jmp_true = format_hack_label(&format!("CMP_TRUE.{}", id));
-    let jmp_false = format_hack_label(&format!("CMP_FALSE.{}", id));
-    let jmp_end = format_hack_label(&format!("CMP_END.{}", id));
+    let x_is_neg = format_hack_label(&format!("CMP_X_IS_NEG{}", id));
+    let jmp_true = format_hack_label(&format!("CMP_TRUE{}", id));
+    let jmp_false = format_hack_label(&format!("CMP_FALSE{}", id));
+    let jmp_end = format_hack_label(&format!("CMP_END{}", id));
 
     let (x_gt_y_target, x_lt_y_target) = match comparison {
         Jump::Jgt => (jmp_true.clone(), jmp_false.clone()),
@@ -330,19 +330,21 @@ fn signed_comparison(id: usize, comparison: Jump) -> Result<Vec<Instruction>, Co
         // @SP
         // A=M-1
         // D=M
-        // @CMP_X_IS_NEG.{x}
+        // @CMP_X_IS_NEG{x}
         // D;JLT
-        // // x >= 0
+        // -- x is >= 0
         // @R13
         // D=M
-        // @{CMP_TRUE.{x} / CMP_FALSE.{x}} // user supplies this arg
+        // -- user supplied jump
+        // @{CMP_TRUE{x} / CMP_FALSE{x}}
         // D;JLT // x >= 0 && y < 0
         // @SP
         // A=M-1
         // D=M-D
-        // @CMP_TRUE.{x}
+        // @CMP_TRUE{x}
+        // -- user supplied comparison
         // D;{JGT | JLT}
-        // @CMP_FALSE.{x}
+        // @CMP_FALSE{x}
         // 0;JMP
         PredefinedSymbol::SP.into(),
         dest_comp(Dest::A, Comp::MMinusOne),
@@ -360,18 +362,20 @@ fn signed_comparison(id: usize, comparison: Jump) -> Result<Vec<Instruction>, Co
         comp_jump(Comp::D, comparison),
         Instruction::a_symbol(jmp_false.clone())?,
         comp_jump(Comp::Zero, Jump::Jmp),
-        // (CMP_X_IS_NEG.{x})
-        // // x < 0
+        // -- x is < 0
+        // (CMP_X_IS_NEG{x})
         // @R13
         // D=M
-        // @{CMP_TRUE.{x} / CMP_FALSE.{x}} // user supplies this arg
-        // D;JGE // x < 0 && y >= 0
+        // -- user supplied arg
+        // @{CMP_TRUE{x} / CMP_FALSE{x}}
+        // -- x < 0 && y >= 0
+        // D;JGE
         // @SP
         // A=M-1
         // D=M-D
-        // @CMP_TRUE.{x}
+        // @CMP_TRUE{x}
         // D;{JGT | JLT} // user supplies this arg
-        // @CMP_FALSE.{x}
+        // @CMP_FALSE{x}
         // 0;JMP
         Instruction::label(x_is_neg)?,
         PredefinedSymbol::R13.into(),
@@ -385,7 +389,7 @@ fn signed_comparison(id: usize, comparison: Jump) -> Result<Vec<Instruction>, Co
         comp_jump(Comp::D, comparison),
         Instruction::a_symbol(jmp_false.clone())?,
         comp_jump(Comp::Zero, Jump::Jmp),
-        // (CMP_TRUE.{x})
+        // (CMP_TRUE{x})
         // @SP
         // A=M-1
         // M=-1
@@ -397,7 +401,7 @@ fn signed_comparison(id: usize, comparison: Jump) -> Result<Vec<Instruction>, Co
         dest_comp(Dest::M, Comp::NegOne),
         Instruction::a_symbol(jmp_end.clone())?,
         comp_jump(Comp::Zero, Jump::Jmp),
-        // (@CMP_FALSE.{x})
+        // (@CMP_FALSE{x})
         // @SP
         // A=M-1
         // M=0
@@ -411,8 +415,8 @@ fn signed_comparison(id: usize, comparison: Jump) -> Result<Vec<Instruction>, Co
 }
 
 fn comparison_equality(count: usize) -> Result<Vec<Instruction>, CodegenError> {
-    let cmp_true_text = format_hack_label(&format!("CMP_TRUE.{}", count));
-    let cmp_end_text = format_hack_label(&format!("CMP_END.{}", count));
+    let cmp_true_text = format_hack_label(&format!("CMP_TRUE{}", count));
+    let cmp_end_text = format_hack_label(&format!("CMP_END{}", count));
 
     Ok(vec![
         PredefinedSymbol::SP.into(),
@@ -452,7 +456,7 @@ fn comp_jump(comp: Comp, jump: Jump) -> Instruction {
 }
 
 fn format_hack_label(label: &str) -> String {
-    format!("__HACK_INTERNALS__.{}", label)
+    format!("__HACK_INTERNALS__{}", label)
 }
 
 #[cfg(test)]
@@ -528,7 +532,7 @@ mod tests {
     fn generates_equality_comparison() {
         assert_eq!(
             generate(vec![VmCommand::Arithmetic(Arithmetic::Eq)]),
-            "@SP\nAM=M-1\nD=M\nA=A-1\nD=M-D\n@__HACK_INTERNALS__.CMP_TRUE.0\nD;JEQ\n@SP\nA=M-1\nM=0\n@__HACK_INTERNALS__.CMP_END.0\n0;JMP\n(__HACK_INTERNALS__.CMP_TRUE.0)\n@SP\nA=M-1\nM=-1\n(__HACK_INTERNALS__.CMP_END.0)\n"
+            "@SP\nAM=M-1\nD=M\nA=A-1\nD=M-D\n@__HACK_INTERNALS__CMP_TRUE0\nD;JEQ\n@SP\nA=M-1\nM=0\n@__HACK_INTERNALS__CMP_END0\n0;JMP\n(__HACK_INTERNALS__CMP_TRUE0)\n@SP\nA=M-1\nM=-1\n(__HACK_INTERNALS__CMP_END0)\n"
         );
     }
 
@@ -543,7 +547,7 @@ mod tests {
             assert_eq!(
                 generate(vec![VmCommand::Arithmetic(arithmetic)]),
                 format!(
-                    "@SP\nAM=M-1\nD=M\n@R13\nM=D\n@SP\nA=M-1\nD=M\n@__HACK_INTERNALS__.CMP_X_IS_NEG.0\nD;JLT\n@R13\nD=M\n@__HACK_INTERNALS__.{nonnegative_x_target}.0\nD;JLT\n@SP\nA=M-1\nD=M-D\n@__HACK_INTERNALS__.CMP_TRUE.0\nD;{comparison_jump}\n@__HACK_INTERNALS__.CMP_FALSE.0\n0;JMP\n(__HACK_INTERNALS__.CMP_X_IS_NEG.0)\n@R13\nD=M\n@__HACK_INTERNALS__.{negative_x_target}.0\nD;JGE\n@SP\nA=M-1\nD=M-D\n@__HACK_INTERNALS__.CMP_TRUE.0\nD;{comparison_jump}\n@__HACK_INTERNALS__.CMP_FALSE.0\n0;JMP\n(__HACK_INTERNALS__.CMP_TRUE.0)\n@SP\nA=M-1\nM=-1\n@__HACK_INTERNALS__.CMP_END.0\n0;JMP\n(__HACK_INTERNALS__.CMP_FALSE.0)\n@SP\nA=M-1\nM=0\n(__HACK_INTERNALS__.CMP_END.0)\n"
+                    "@SP\nAM=M-1\nD=M\n@R13\nM=D\n@SP\nA=M-1\nD=M\n@__HACK_INTERNALS__CMP_X_IS_NEG0\nD;JLT\n@R13\nD=M\n@__HACK_INTERNALS__{nonnegative_x_target}0\nD;JLT\n@SP\nA=M-1\nD=M-D\n@__HACK_INTERNALS__CMP_TRUE0\nD;{comparison_jump}\n@__HACK_INTERNALS__CMP_FALSE0\n0;JMP\n(__HACK_INTERNALS__CMP_X_IS_NEG0)\n@R13\nD=M\n@__HACK_INTERNALS__{negative_x_target}0\nD;JGE\n@SP\nA=M-1\nD=M-D\n@__HACK_INTERNALS__CMP_TRUE0\nD;{comparison_jump}\n@__HACK_INTERNALS__CMP_FALSE0\n0;JMP\n(__HACK_INTERNALS__CMP_TRUE0)\n@SP\nA=M-1\nM=-1\n@__HACK_INTERNALS__CMP_END0\n0;JMP\n(__HACK_INTERNALS__CMP_FALSE0)\n@SP\nA=M-1\nM=0\n(__HACK_INTERNALS__CMP_END0)\n"
                 )
             );
         }
@@ -573,12 +577,12 @@ mod tests {
 
         let first = format_instructions(&first);
         let second = format_instructions(&second);
-        assert!(first.contains("@__HACK_INTERNALS__.CMP_TRUE.0\n"));
-        assert!(first.contains("(__HACK_INTERNALS__.CMP_END.0)\n"));
-        assert!(first.contains("@__HACK_INTERNALS__.CMP_TRUE.1\n"));
-        assert!(first.contains("(__HACK_INTERNALS__.CMP_END.1)\n"));
-        assert!(second.contains("@__HACK_INTERNALS__.CMP_TRUE.2\n"));
-        assert!(second.contains("(__HACK_INTERNALS__.CMP_END.2)\n"));
+        assert!(first.contains("@__HACK_INTERNALS__CMP_TRUE0\n"));
+        assert!(first.contains("(__HACK_INTERNALS__CMP_END0)\n"));
+        assert!(first.contains("@__HACK_INTERNALS__CMP_TRUE1\n"));
+        assert!(first.contains("(__HACK_INTERNALS__CMP_END1)\n"));
+        assert!(second.contains("@__HACK_INTERNALS__CMP_TRUE2\n"));
+        assert!(second.contains("(__HACK_INTERNALS__CMP_END2)\n"));
     }
 
     #[test]
@@ -683,7 +687,7 @@ mod tests {
         let cases = [
             (Segment::Pointer, 1, "THAT"),
             (Segment::Temp, 7, "R12"),
-            (Segment::Static, 3, "Test.3"),
+            (Segment::Static, 3, "Test3"),
         ];
 
         for (segment, index, symbol) in cases {
@@ -693,7 +697,7 @@ mod tests {
             );
         }
 
-        for (segment, index, symbol) in [(Segment::Temp, 0, "R5"), (Segment::Static, 3, "Test.3")] {
+        for (segment, index, symbol) in [(Segment::Temp, 0, "R5"), (Segment::Static, 3, "Test3")] {
             assert_eq!(
                 generate(vec![VmCommand::Pop { segment, index }]),
                 format!("@SP\nAM=M-1\nD=M\n@{symbol}\nM=D\n")
@@ -729,7 +733,7 @@ mod tests {
                 }])
                 .unwrap_err(),
             CodegenError::AssemblyGenError(InstructionError::InvalidSymbol(
-                "bad-name.0".to_string()
+                "bad-name0".to_string()
             ))
         );
     }
@@ -755,7 +759,7 @@ mod tests {
                 .generate(vec![VmCommand::Arithmetic(Arithmetic::Eq)])
                 .unwrap(),
         );
-        assert!(output.contains("@__HACK_INTERNALS__.CMP_TRUE.0\n"));
-        assert!(!output.contains("@__HACK_INTERNALS__.CMP_TRUE.1\n"));
+        assert!(output.contains("@__HACK_INTERNALS__CMP_TRUE0\n"));
+        assert!(!output.contains("@__HACK_INTERNALS__CMP_TRUE1\n"));
     }
 }

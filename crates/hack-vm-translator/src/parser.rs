@@ -1,6 +1,6 @@
-use crate::token::{Keyword, Token, Tokenizer};
+use crate::token::{Keyword, Token};
 use crate::vm::{Arithmetic, Segment};
-use std::iter::Peekable;
+use logos::{Lexer, Logos};
 use std::{fmt, fmt::Display};
 use thiserror::Error;
 
@@ -34,24 +34,20 @@ impl Display for VmCommand {
 }
 
 pub struct Parser<'a> {
-    tokenizer: Peekable<Tokenizer<'a>>,
+    tokenizer: Lexer<'a, Token<'a>>,
+    current: Option<Result<Token<'a>, ()>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(src: &'a str) -> Self {
-        let tokenizer = Tokenizer::new(src).peekable();
-        Self { tokenizer }
-    }
-
-    pub fn from_tokenizer(tokenizer: Tokenizer<'a>) -> Self {
-        Self {
-            tokenizer: tokenizer.peekable(),
-        }
+        let mut tokenizer = Token::lexer(src);
+        let current = tokenizer.next();
+        Self { tokenizer, current }
     }
 
     pub fn parse_all(&mut self) -> Result<Vec<VmCommand>, ParseError> {
         let mut instructions = Vec::new();
-        while let Some(begin) = self.next_token() {
+        while let Some(begin) = self.next_token()? {
             match begin {
                 Token::Keyword(keyword) => instructions.push(self.parse_vm_command(keyword)?),
                 Token::Arithmetic(arithmetic) => {
@@ -59,12 +55,13 @@ impl<'a> Parser<'a> {
                 }
                 _ => return Err(ParseError::UnexpectedToken(begin.to_string())),
             }
+            self.expect_line_end()?;
         }
         Ok(instructions)
     }
 
     fn parse_vm_command(&mut self, keyword: Keyword) -> Result<VmCommand, ParseError> {
-        if let Some(next) = self.tokenizer.next() {
+        if let Some(next) = self.advance()? {
             match next {
                 Token::Segment(segment) => {
                     let index = self.expect_index()?;
@@ -85,31 +82,57 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_index(&mut self) -> Result<u16, ParseError> {
-        if let Some(t) = self.tokenizer.next() {
-            match t {
-                Token::Number(num_str) => {
-                    let index = num_str
-                        .parse::<u16>()
-                        .map_err(|_| ParseError::InvalidNumber(num_str.to_string()))?;
-                    Ok(index)
-                }
-                _ => Err(ParseError::UnexpectedToken(t.to_string())),
+        self.expect(|t| match t {
+            Some(Token::Number(num_str)) => {
+                let index = num_str
+                    .parse::<u16>()
+                    .map_err(|_| ParseError::InvalidNumber(num_str.to_string()))?;
+                Ok(index)
             }
-        } else {
-            Err(ParseError::UnexpectedEnd)
+            Some(token) => Err(ParseError::UnexpectedToken(token.to_string())),
+            None => Err(ParseError::UnexpectedEnd),
+        })
+    }
+
+    fn expect_line_end(&mut self) -> Result<(), ParseError> {
+        self.expect(|token| match token {
+            Some(Token::Newline) | None => Ok(()),
+            Some(token) => Err(ParseError::UnexpectedToken(token.to_string())),
+        })
+    }
+
+    fn expect<T, F>(&mut self, f: F) -> Result<T, ParseError>
+    where
+        F: FnOnce(Option<Token<'a>>) -> Result<T, ParseError>,
+    {
+        f(self.advance()?)
+    }
+
+    fn next_token(&mut self) -> Result<Option<Token<'a>>, ParseError> {
+        self.skip_newlines()?;
+        self.advance()
+    }
+
+    fn skip_newlines(&mut self) -> Result<(), ParseError> {
+        while matches!(self.current.as_ref(), Some(Ok(Token::Newline))) {
+            self.advance()?;
         }
+        Ok(())
     }
 
-    fn next_token(&mut self) -> Option<Token<'a>> {
-        self.skip_newlines();
-        self.tokenizer.next()
-    }
+    fn advance(&mut self) -> Result<Option<Token<'a>>, ParseError> {
+        let token = self.current.take();
+        if token.as_ref().is_some_and(Result::is_err) {
+            return Err(ParseError::UnexpectedToken(
+                self.tokenizer.slice().to_string(),
+            ));
+        }
 
-    // fn parse_vm_command(&mut self, )
-
-    fn skip_newlines(&mut self) {
-        while matches!(self.tokenizer.peek(), Some(Token::Newline)) {
-            let _ = self.tokenizer.next();
+        self.current = self.tokenizer.next();
+        match token {
+            Some(Ok(token)) => Ok(Some(token)),
+            None => Ok(None),
+            Some(Err(())) => unreachable!("lexer errors return before advancing"),
         }
     }
 }
@@ -342,6 +365,10 @@ mod tests {
             parse("multiply"),
             Err(ParseError::UnexpectedToken("multiply".to_string()))
         );
+        assert_eq!(
+            parse("💥"),
+            Err(ParseError::UnexpectedToken("💥".to_string()))
+        );
     }
 
     #[test]
@@ -383,20 +410,6 @@ mod tests {
             Ok(vec![VmCommand::Push {
                 segment: Segment::Constant,
                 index: u16::MAX,
-            }])
-        );
-    }
-
-    #[test]
-    fn parser_can_be_created_from_tokenizer() {
-        let tokenizer = Tokenizer::new("push argument 4");
-        let mut parser = Parser::from_tokenizer(tokenizer);
-
-        assert_eq!(
-            parser.parse_all(),
-            Ok(vec![VmCommand::Push {
-                segment: Segment::Argument,
-                index: 4,
             }])
         );
     }
