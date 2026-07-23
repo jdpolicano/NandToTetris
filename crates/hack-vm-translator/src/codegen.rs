@@ -7,8 +7,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CodegenError {
-    #[error("assembly gen error `{0}`")]
-    AssemblyGenError(#[from] InstructionError),
+    #[error("unable to construct generated Hack instruction: {0}")]
+    InvalidGeneratedInstruction(#[from] InstructionError),
+    #[error("invalid static file stem `{0}`")]
+    InvalidStaticStem(String),
     #[error("invalid pointer index `{0}`")]
     InvalidPointerIndex(u16),
     #[error("invalid temp index `{0}`")]
@@ -21,31 +23,31 @@ pub enum CodegenError {
 
 pub struct Codegen {
     assembly: Vec<Instruction>,
-    label_count: usize,
-    file_name: String,
+    symbols: SymbolAllocator,
 }
 
 impl Codegen {
-    pub fn new(file_name: impl Into<String>) -> Self {
-        Self {
+    pub fn new(file_stem: impl Into<String>) -> Result<Self, CodegenError> {
+        Ok(Self {
             assembly: vec![],
-            label_count: 0,
-            file_name: file_name.into(),
-        }
+            symbols: SymbolAllocator::new(file_stem.into())?,
+        })
     }
 
-    pub fn generate(&mut self, commands: Vec<VmCommand>) -> Result<Vec<Instruction>, CodegenError> {
+    pub fn emit(&mut self, command: &VmCommand) -> Result<(), CodegenError> {
         let assembly_len = self.assembly.len();
-        let label_count = self.label_count;
+        let comparison_count = self.symbols.comparison_count;
 
         let result = (|| {
-            for command in commands {
-                self.assembly
-                    .push(Instruction::Comment(command.to_string()));
-                match command {
-                    VmCommand::Arithmetic(arithmetic) => self.generate_arithmetic(arithmetic)?,
-                    VmCommand::Pop { segment, index } => self.generate_pop(segment, index)?,
-                    VmCommand::Push { segment, index } => self.generate_push(segment, index)?,
+            self.assembly
+                .push(Instruction::Comment(command.to_string()));
+            match command {
+                VmCommand::Arithmetic(arithmetic) => {
+                    self.generate_arithmetic(arithmetic.clone())?
+                }
+                VmCommand::Pop { segment, index } => self.generate_pop(segment.clone(), *index)?,
+                VmCommand::Push { segment, index } => {
+                    self.generate_push(segment.clone(), *index)?
                 }
             }
             Ok(())
@@ -53,17 +55,14 @@ impl Codegen {
 
         if let Err(error) = result {
             self.assembly.truncate(assembly_len);
-            self.label_count = label_count;
+            self.symbols.comparison_count = comparison_count;
             return Err(error);
         }
-
-        Ok(std::mem::take(&mut self.assembly))
+        Ok(())
     }
 
-    fn get_label_id(&mut self) -> usize {
-        let count = self.label_count;
-        self.label_count += 1;
-        count
+    pub fn finish(self) -> Vec<Instruction> {
+        self.assembly
     }
 
     fn generate_arithmetic(&mut self, arithmetic: Arithmetic) -> Result<(), CodegenError> {
@@ -77,23 +76,23 @@ impl Codegen {
             Arithmetic::Not => unary_arithmetic(Comp::NotM),
             Arithmetic::Neg => unary_arithmetic(Comp::NegM),
             // for some comp (gt, lt, eq)
-            Arithmetic::Eq => comparison_equality(self.get_label_id())?,
-            Arithmetic::Lt => signed_comparison(self.get_label_id(), Jump::Jlt)?,
-            Arithmetic::Gt => signed_comparison(self.get_label_id(), Jump::Jgt)?,
+            Arithmetic::Eq => comparison_equality(self.symbols.next_comparison_id())?,
+            Arithmetic::Lt => signed_comparison(self.symbols.next_comparison_id(), Jump::Jlt)?,
+            Arithmetic::Gt => signed_comparison(self.symbols.next_comparison_id(), Jump::Jgt)?,
         };
         self.assembly.extend_from_slice(&instructions);
         Ok(())
     }
 
-    fn generate_pop(&mut self, segment: Segment, address: u16) -> Result<(), CodegenError> {
+    fn generate_pop(&mut self, segment: Segment, index: u16) -> Result<(), CodegenError> {
         let instructions = match segment {
-            Segment::Local => pop_offset(PredefinedSymbol::LCL, address)?,
-            Segment::Argument => pop_offset(PredefinedSymbol::ARG, address)?,
-            Segment::This => pop_offset(PredefinedSymbol::THIS, address)?,
-            Segment::That => pop_offset(PredefinedSymbol::THAT, address)?,
-            Segment::Pointer => pop_pointer(address)?,
-            Segment::Temp => pop_to(temp_symbol(address)?.into()),
-            Segment::Static => pop_to(static_symbol(&self.file_name, address)?),
+            Segment::Local => pop_offset(PredefinedSymbol::LCL, index)?,
+            Segment::Argument => pop_offset(PredefinedSymbol::ARG, index)?,
+            Segment::This => pop_offset(PredefinedSymbol::THIS, index)?,
+            Segment::That => pop_offset(PredefinedSymbol::THAT, index)?,
+            Segment::Pointer => pop_pointer(index)?,
+            Segment::Temp => pop_to(temp_symbol(index)?.into()),
+            Segment::Static => pop_to(self.symbols.static_symbol(index)?),
             Segment::Constant => return Err(CodegenError::CannotPopConstant),
         };
         self.assembly.extend_from_slice(&instructions);
@@ -109,10 +108,49 @@ impl Codegen {
             Segment::That => push_offset(PredefinedSymbol::THAT, index)?,
             Segment::Pointer => push_from(pointer_symbol(index)?.into()),
             Segment::Temp => push_from(temp_symbol(index)?.into()),
-            Segment::Static => push_from(static_symbol(&self.file_name, index)?),
+            Segment::Static => push_from(self.symbols.static_symbol(index)?),
         };
         self.assembly.extend_from_slice(&instructions);
         Ok(())
+    }
+}
+
+const INTERNAL_SYMBOL_PREFIX: &str = "__HACK_INTERNALS__";
+
+struct SymbolAllocator {
+    static_stem: String,
+    comparison_count: usize,
+}
+
+impl SymbolAllocator {
+    fn new(static_stem: String) -> Result<Self, CodegenError> {
+        if static_stem.starts_with(INTERNAL_SYMBOL_PREFIX)
+            || Instruction::a_symbol(&static_stem).is_err()
+        {
+            return Err(CodegenError::InvalidStaticStem(static_stem));
+        }
+        Ok(Self {
+            static_stem,
+            comparison_count: 0,
+        })
+    }
+
+    fn static_symbol(&self, index: u16) -> Result<AValue, CodegenError> {
+        let instruction = Instruction::a_symbol(format!("{}.{index}", self.static_stem))?;
+        match instruction {
+            Instruction::A(value) => Ok(value),
+            _ => unreachable!("Instruction::a_symbol always constructs an A-instruction"),
+        }
+    }
+
+    fn next_comparison_id(&mut self) -> usize {
+        let id = self.comparison_count;
+        self.comparison_count += 1;
+        id
+    }
+
+    fn internal_label(label: &str) -> String {
+        format!("{INTERNAL_SYMBOL_PREFIX}{label}")
     }
 }
 
@@ -132,11 +170,11 @@ impl Codegen {
 // @R13
 // A=M        // A = target address
 // M=D        // *target = popped value
-fn pop_offset(target: PredefinedSymbol, offset: u16) -> Result<Vec<Instruction>, CodegenError> {
+fn pop_offset(base: PredefinedSymbol, index: u16) -> Result<Vec<Instruction>, CodegenError> {
     Ok(vec![
-        Instruction::a_number(offset)?,
+        Instruction::a_number(index)?,
         dest_comp(Dest::D, Comp::A),
-        target.into(),
+        base.into(),
         dest_comp(Dest::D, Comp::DPlusM),
         PredefinedSymbol::R13.into(),
         dest_comp(Dest::M, Comp::D),
@@ -190,9 +228,9 @@ fn push_constant(value: u16) -> Result<Vec<Instruction>, CodegenError> {
 // M=D
 // @SP
 // M=M+1
-fn push_offset(base: PredefinedSymbol, offset: u16) -> Result<Vec<Instruction>, CodegenError> {
+fn push_offset(base: PredefinedSymbol, index: u16) -> Result<Vec<Instruction>, CodegenError> {
     Ok(vec![
-        Instruction::a_number(offset)?,
+        Instruction::a_number(index)?,
         dest_comp(Dest::D, Comp::A),
         base.into(),
         dest_comp(Dest::A, Comp::DPlusM),
@@ -260,13 +298,6 @@ fn temp_symbol(index: u16) -> Result<PredefinedSymbol, CodegenError> {
         6 => Ok(PredefinedSymbol::R11),
         7 => Ok(PredefinedSymbol::R12),
         _ => Err(CodegenError::InvalidTempIndex(index)),
-    }
-}
-
-fn static_symbol(file_name: &str, index: u16) -> Result<AValue, CodegenError> {
-    match Instruction::a_symbol(format!("{file_name}{index}"))? {
-        Instruction::A(value) => Ok(value),
-        _ => unreachable!("Instruction::a_symbol always constructs an A-instruction"),
     }
 }
 
@@ -456,7 +487,7 @@ fn comp_jump(comp: Comp, jump: Jump) -> Instruction {
 }
 
 fn format_hack_label(label: &str) -> String {
-    format!("__HACK_INTERNALS__{}", label)
+    SymbolAllocator::internal_label(label)
 }
 
 #[cfg(test)]
@@ -465,9 +496,12 @@ mod tests {
     use hack_assembler::{InstructionError, format_instructions};
 
     fn generate(commands: Vec<VmCommand>) -> String {
-        let instructions = Codegen::new("Test")
-            .generate(commands)
-            .unwrap()
+        let mut codegen = Codegen::new("Test").unwrap();
+        for command in &commands {
+            codegen.emit(command).unwrap();
+        }
+        let instructions = codegen
+            .finish()
             .into_iter()
             .filter(|instruction| !matches!(instruction, Instruction::Comment(_)))
             .collect::<Vec<_>>();
@@ -475,13 +509,17 @@ mod tests {
     }
 
     fn generate_with_comments(commands: Vec<VmCommand>) -> String {
-        format_instructions(&Codegen::new("Test").generate(commands).unwrap())
+        let mut codegen = Codegen::new("Test").unwrap();
+        for command in &commands {
+            codegen.emit(command).unwrap();
+        }
+        format_instructions(&codegen.finish())
     }
 
     #[test]
     fn codegen_uses_structured_hack_instruction_output() {
-        let mut codegen = Codegen::new("Test");
-        let output: Vec<hack_assembler::Instruction> = codegen.generate(vec![]).unwrap();
+        let codegen = Codegen::new("Test").unwrap();
+        let output: Vec<hack_assembler::Instruction> = codegen.finish();
         assert!(output.is_empty());
     }
 
@@ -562,27 +600,16 @@ mod tests {
     }
 
     #[test]
-    fn comparison_labels_remain_unique_across_generate_calls() {
-        let mut codegen = Codegen::new("Test");
-
-        let first = codegen
-            .generate(vec![
-                VmCommand::Arithmetic(Arithmetic::Eq),
-                VmCommand::Arithmetic(Arithmetic::Lt),
-            ])
-            .unwrap();
-        let second = codegen
-            .generate(vec![VmCommand::Arithmetic(Arithmetic::Gt)])
-            .unwrap();
-
-        let first = format_instructions(&first);
-        let second = format_instructions(&second);
-        assert!(first.contains("@__HACK_INTERNALS__CMP_TRUE0\n"));
-        assert!(first.contains("(__HACK_INTERNALS__CMP_END0)\n"));
-        assert!(first.contains("@__HACK_INTERNALS__CMP_TRUE1\n"));
-        assert!(first.contains("(__HACK_INTERNALS__CMP_END1)\n"));
-        assert!(second.contains("@__HACK_INTERNALS__CMP_TRUE2\n"));
-        assert!(second.contains("(__HACK_INTERNALS__CMP_END2)\n"));
+    fn comparison_labels_remain_unique_across_emit_calls() {
+        let mut codegen = Codegen::new("Test").unwrap();
+        for arithmetic in [Arithmetic::Eq, Arithmetic::Lt, Arithmetic::Gt] {
+            codegen.emit(&VmCommand::Arithmetic(arithmetic)).unwrap();
+        }
+        let output = format_instructions(&codegen.finish());
+        for id in 0..3 {
+            assert!(output.contains(&format!("@__HACK_INTERNALS__CMP_TRUE{id}\n")));
+            assert!(output.contains(&format!("(__HACK_INTERNALS__CMP_END{id})\n")));
+        }
     }
 
     #[test]
@@ -631,11 +658,12 @@ mod tests {
 
     #[test]
     fn rejects_invalid_pointer_indices() {
-        let error = Codegen::new("Test")
-            .generate(vec![VmCommand::Pop {
+        let mut codegen = Codegen::new("Test").unwrap();
+        let error = codegen
+            .emit(&VmCommand::Pop {
                 segment: Segment::Pointer,
                 index: 2,
-            }])
+            })
             .unwrap_err();
 
         assert_eq!(error, CodegenError::InvalidPointerIndex(2));
@@ -643,16 +671,17 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_offset_addresses() {
-        let error = Codegen::new("Test")
-            .generate(vec![VmCommand::Pop {
+        let mut codegen = Codegen::new("Test").unwrap();
+        let error = codegen
+            .emit(&VmCommand::Pop {
                 segment: Segment::Local,
                 index: 32_768,
-            }])
+            })
             .unwrap_err();
 
         assert_eq!(
             error,
-            CodegenError::AssemblyGenError(InstructionError::AddressOutOfRange(32_768))
+            CodegenError::InvalidGeneratedInstruction(InstructionError::AddressOutOfRange(32_768))
         );
     }
 
@@ -687,7 +716,7 @@ mod tests {
         let cases = [
             (Segment::Pointer, 1, "THAT"),
             (Segment::Temp, 7, "R12"),
-            (Segment::Static, 3, "Test3"),
+            (Segment::Static, 3, "Test.3"),
         ];
 
         for (segment, index, symbol) in cases {
@@ -697,7 +726,7 @@ mod tests {
             );
         }
 
-        for (segment, index, symbol) in [(Segment::Temp, 0, "R5"), (Segment::Static, 3, "Test3")] {
+        for (segment, index, symbol) in [(Segment::Temp, 0, "R5"), (Segment::Static, 3, "Test.3")] {
             assert_eq!(
                 generate(vec![VmCommand::Pop { segment, index }]),
                 format!("@SP\nAM=M-1\nD=M\n@{symbol}\nM=D\n")
@@ -709,56 +738,83 @@ mod tests {
     fn rejects_invalid_memory_accesses() {
         assert_eq!(
             Codegen::new("Test")
-                .generate(vec![VmCommand::Push {
+                .unwrap()
+                .emit(&VmCommand::Push {
                     segment: Segment::Temp,
                     index: 8,
-                }])
+                })
                 .unwrap_err(),
             CodegenError::InvalidTempIndex(8)
         );
         assert_eq!(
             Codegen::new("Test")
-                .generate(vec![VmCommand::Pop {
+                .unwrap()
+                .emit(&VmCommand::Pop {
                     segment: Segment::Constant,
                     index: 0,
-                }])
+                })
                 .unwrap_err(),
             CodegenError::CannotPopConstant
         );
         assert_eq!(
-            Codegen::new("bad-name")
-                .generate(vec![VmCommand::Push {
-                    segment: Segment::Static,
-                    index: 0,
-                }])
-                .unwrap_err(),
-            CodegenError::AssemblyGenError(InstructionError::InvalidSymbol(
-                "bad-name0".to_string()
-            ))
+            Codegen::new("bad-name").err().unwrap(),
+            CodegenError::InvalidStaticStem("bad-name".to_string())
         );
     }
 
     #[test]
+    fn validates_static_stems_before_emitting_output() {
+        for stem in ["Foo", "Foo.bar", "Foo$bar", "_Foo", ":Foo"] {
+            assert!(Codegen::new(stem).is_ok(), "expected `{stem}` to be valid");
+        }
+        for stem in [
+            "",
+            "bad-name",
+            "bad name",
+            "é",
+            "__HACK_INTERNALS__",
+            "__HACK_INTERNALS__CMP_TRUE0",
+        ] {
+            assert_eq!(
+                Codegen::new(stem).err().unwrap(),
+                CodegenError::InvalidStaticStem(stem.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn static_symbols_cannot_collide_with_internal_labels() {
+        assert!(Codegen::new("__HACK_INTERNALS__CMP_TRUE").is_err());
+
+        let output = generate_with_comments(vec![
+            VmCommand::Push {
+                segment: Segment::Static,
+                index: 0,
+            },
+            VmCommand::Arithmetic(Arithmetic::Eq),
+        ]);
+        assert!(output.contains("@Test.0\n"));
+        assert!(output.contains("(__HACK_INTERNALS__CMP_TRUE0)\n"));
+    }
+
+    #[test]
     fn errors_roll_back_partial_output_and_comparison_labels() {
-        let mut codegen = Codegen::new("Test");
+        let mut codegen = Codegen::new("Test").unwrap();
         assert_eq!(
             codegen
-                .generate(vec![
-                    VmCommand::Arithmetic(Arithmetic::Eq),
-                    VmCommand::Pop {
-                        segment: Segment::Pointer,
-                        index: 2,
-                    },
-                ])
+                .emit(&VmCommand::Pop {
+                    segment: Segment::Pointer,
+                    index: 2,
+                })
                 .unwrap_err(),
             CodegenError::InvalidPointerIndex(2)
         );
 
-        let output = format_instructions(
-            &codegen
-                .generate(vec![VmCommand::Arithmetic(Arithmetic::Eq)])
-                .unwrap(),
-        );
+        codegen
+            .emit(&VmCommand::Arithmetic(Arithmetic::Eq))
+            .unwrap();
+        let output = format_instructions(&codegen.finish());
+        assert!(!output.contains("// pop pointer 2\n"));
         assert!(output.contains("@__HACK_INTERNALS__CMP_TRUE0\n"));
         assert!(!output.contains("@__HACK_INTERNALS__CMP_TRUE1\n"));
     }

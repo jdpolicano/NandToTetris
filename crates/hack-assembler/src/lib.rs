@@ -1,14 +1,29 @@
-pub mod codegen;
-pub mod instruction;
-pub mod parser;
-pub mod token;
+//! Parser, formatter, and machine-code generator for the Hack assembly language.
+//!
+//! This crate implements the assembler portion of nand2tetris Project 6. Use
+//! [`parse`] when typed [`Instruction`] values are needed, [`assemble`] for the
+//! complete source-to-machine-code path, and [`assemble_instructions`] when a
+//! preceding compiler stage already produces typed instructions.
+//!
+//! [`Instruction`] intentionally includes labels and comments alongside
+//! executable A- and C-instructions. Keeping one ordered representation makes
+//! parsing, formatting, and VM translation straightforward; these variants can
+//! be separated if a future semantic analysis or optimization pass needs an
+//! executable-only representation.
+
+mod codegen;
+mod instruction;
+mod parser;
+mod token;
 
 use thiserror::Error;
 
 pub use codegen::{CodegenError, generate};
+pub use hack_source::{SourcePosition, SourceSpan};
 pub use instruction::{AValue, Comp, Dest, Instruction, InstructionError, Jump, PredefinedSymbol};
-pub use parser::{ParseError, Parser};
+pub use parser::{ParseError, ParseErrorKind};
 
+/// An error produced while parsing or generating a Hack program.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AssembleError {
     #[error("unable to parse assembly {0}")]
@@ -17,15 +32,21 @@ pub enum AssembleError {
     Codegen(#[from] CodegenError),
 }
 
+/// Parses Hack assembly source into its ordered, typed representation.
 pub fn parse(source: &str) -> Result<Vec<Instruction>, ParseError> {
-    Parser::new(source).parse_all()
+    parser::Parser::new(source).parse_all()
 }
 
+/// Assembles Hack assembly source into newline-terminated 16-bit binary words.
 pub fn assemble(source: &str) -> Result<String, AssembleError> {
     let instructions = parse(source)?;
     Ok(assemble_instructions(&instructions)?)
 }
 
+/// Generates machine code from typed Hack instructions.
+///
+/// Labels and comments affect formatting and symbol resolution as appropriate,
+/// but do not produce machine-code words.
 pub fn assemble_instructions(instructions: &[Instruction]) -> Result<String, CodegenError> {
     let output = generate(instructions)?;
     Ok(if output.is_empty() {
@@ -35,6 +56,7 @@ pub fn assemble_instructions(instructions: &[Instruction]) -> Result<String, Cod
     })
 }
 
+/// Formats typed instructions as canonical Hack assembly, one item per line.
 pub fn format_instructions(instructions: &[Instruction]) -> String {
     use std::fmt::Write;
 
@@ -48,6 +70,30 @@ pub fn format_instructions(instructions: &[Instruction]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn parser_never_panics_for_arbitrary_bounded_text(
+            source in prop::collection::vec(any::<char>(), 0..=2048)
+                .prop_map(|characters| characters.into_iter().collect::<String>())
+        ) {
+            let _ = parse(&source);
+        }
+
+        #[test]
+        fn successful_parses_round_trip_through_canonical_format(
+            source in prop::collection::vec(any::<char>(), 0..=2048)
+                .prop_map(|characters| characters.into_iter().collect::<String>())
+        ) {
+            if let Ok(parsed) = parse(&source) {
+                let formatted = format_instructions(&parsed);
+                prop_assert_eq!(parse(&formatted), Ok(parsed));
+            }
+        }
+    }
 
     #[test]
     fn assembles_source_with_a_trailing_newline() {
@@ -227,5 +273,20 @@ mod tests {
             assemble_instructions(&instructions).unwrap(),
             "0000000000000111\n"
         );
+    }
+
+    #[test]
+    fn handles_comments_at_eof_and_crlf_without_panicking() {
+        assert_eq!(
+            parse("@1\r\nD=A\r\n// trailing comment"),
+            parse("@1\nD=A\n")
+        );
+    }
+
+    #[test]
+    fn rejects_unicode_and_long_invalid_words_without_panicking() {
+        assert!(parse("@λ\n").is_err());
+        assert!(parse(&format!("@{}\n", "x".repeat(16_384))).is_ok());
+        assert!(parse(&format!("{}\n", "unknown".repeat(4_096))).is_err());
     }
 }

@@ -1,3 +1,4 @@
+use hack_source::PositionTracker;
 use logos::Logos;
 
 /// Lexical tokens produced from Hack assembly source.
@@ -6,7 +7,7 @@ use logos::Logos;
 /// whether an identifier is being used as a dest, comp, jump, label, or
 /// A-instruction symbol; those grammar roles are assigned by the parser.
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
-#[logos(extras=(usize, usize))]
+#[logos(extras = PositionTracker)]
 #[logos(skip r#"[^\S\n]"#)]
 #[logos(skip(r"//[^\n]*", allow_greedy = true))]
 pub enum Token<'a> {
@@ -43,6 +44,19 @@ pub enum Token<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn tokenizer_never_panics_for_arbitrary_bounded_text(
+            input in prop::collection::vec(any::<char>(), 0..=2048)
+                .prop_map(|characters| characters.into_iter().collect::<String>())
+        ) {
+            let _: Vec<_> = Token::lexer(&input).collect();
+        }
+    }
 
     fn tokens(input: &str) -> Result<Vec<Token<'_>>, ()> {
         let mut tokens = Vec::new();

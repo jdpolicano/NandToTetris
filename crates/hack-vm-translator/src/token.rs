@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use crate::vm::{Arithmetic, Segment};
+use hack_source::PositionTracker;
 use logos::Logos;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +20,7 @@ impl Display for Keyword {
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq)]
+#[logos(extras = PositionTracker)]
 #[logos(skip r"[^\S\n]")]
 #[logos(skip(r"//[^\n]*", allow_greedy = true))]
 pub enum Token<'a> {
@@ -68,6 +70,19 @@ impl<'a> Display for Token<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn tokenizer_never_panics_for_arbitrary_bounded_text(
+            input in prop::collection::vec(any::<char>(), 0..=2048)
+                .prop_map(|characters| characters.into_iter().collect::<String>())
+        ) {
+            let _: Vec<_> = Token::lexer(&input).collect();
+        }
+    }
 
     fn tokens(input: &str) -> Vec<Token<'_>> {
         Token::lexer(input).map(Result::unwrap).collect()

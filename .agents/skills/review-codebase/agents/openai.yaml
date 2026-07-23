@@ -1,0 +1,4 @@
+interface:
+  display_name: "Senior Code Review"
+  short_description: "Conduct candid, production-minded code reviews"
+  default_prompt: "Use $review-codebase to conduct a thorough, prioritized review of this repository."

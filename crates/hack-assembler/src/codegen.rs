@@ -253,4 +253,34 @@ mod tests {
         );
         assert!(!variables.contains_key("overflow"));
     }
+
+    #[test]
+    fn accepts_exactly_the_full_rom_and_rejects_one_more_instruction() {
+        let full_rom = vec![Instruction::A(AValue::Number(0)); 32_768];
+        assert_eq!(generate(&full_rom).unwrap().len(), 32_768);
+
+        let overflow = vec![Instruction::A(AValue::Number(0)); 32_769];
+        assert_eq!(
+            generate(&overflow),
+            Err(CodegenError::AddressOverflow("32768".to_string()))
+        );
+    }
+
+    #[test]
+    fn allocates_every_variable_address_then_reports_exhaustion() {
+        let instructions: Vec<_> = (16..=16_384)
+            .map(|address| Instruction::A(AValue::Symbol(format!("variable_{address}"))))
+            .collect();
+
+        assert_eq!(
+            generate(&instructions),
+            Err(CodegenError::VariableAddressSpaceExhausted(
+                "variable_16384".to_string()
+            ))
+        );
+
+        let through_last_address = &instructions[..16_368];
+        let output = generate(through_last_address).unwrap();
+        assert_eq!(output.last().unwrap(), "0011111111111111");
+    }
 }

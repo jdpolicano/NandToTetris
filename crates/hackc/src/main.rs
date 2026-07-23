@@ -1,10 +1,12 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use clap::{Parser, ValueEnum};
+use same_file::is_same_file;
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -70,15 +72,29 @@ enum CliError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("unable to compile `{path}`: {source}")]
-    Assemble {
+    #[error("{path}:{line}:{column}: {source}")]
+    AssembleParse {
         path: PathBuf,
-        source: hack_assembler::AssembleError,
+        line: usize,
+        column: usize,
+        source: hack_assembler::ParseError,
+    },
+    #[error("unable to compile `{path}`: {source}")]
+    AssembleCodegen {
+        path: PathBuf,
+        source: hack_assembler::CodegenError,
+    },
+    #[error("{path}:{line}:{column}: {source}")]
+    TranslateParse {
+        path: PathBuf,
+        line: usize,
+        column: usize,
+        source: hack_vm_translator::ParseError,
     },
     #[error("unable to translate `{path}`: {source}")]
-    Translate {
+    TranslateCodegen {
         path: PathBuf,
-        source: hack_vm_translator::TranslateError,
+        source: hack_vm_translator::CodegenError,
     },
     #[error("unable to assemble translated VM `{path}`: {source}")]
     AssembleInstructions {
@@ -87,6 +103,8 @@ enum CliError {
     },
     #[error("VM input path `{0}` does not have a valid UTF-8 file stem")]
     InvalidVmFileName(PathBuf),
+    #[error("input and output refer to the same file: `{0}`")]
+    SameInputAndOutput(PathBuf),
     #[error("unable to write `{path}`: {source}")]
     Write {
         path: PathBuf,
@@ -112,6 +130,25 @@ fn output_path(input: &Path, requested: Option<PathBuf>, emit: Format) -> PathBu
     path
 }
 
+fn paths_refer_to_same_file(input: &Path, output: &Path) -> std::io::Result<bool> {
+    match is_same_file(input, output) {
+        Ok(is_same) => Ok(is_same),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_atomically(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    temporary.write_all(contents.as_ref())?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
 fn run(args: Args) -> Result<PathBuf, CliError> {
     let from = args
         .from
@@ -126,15 +163,31 @@ fn run(args: Args) -> Result<PathBuf, CliError> {
         return Err(CliError::UnsupportedRoute { from, emit });
     }
 
+    let output = output_path(&args.input, args.output, emit);
+    if paths_refer_to_same_file(&args.input, &output).map_err(|source| CliError::Write {
+        path: output.clone(),
+        source,
+    })? {
+        return Err(CliError::SameInputAndOutput(output));
+    }
+
     let source = fs::read_to_string(&args.input).map_err(|source| CliError::Read {
         path: args.input.clone(),
         source,
     })?;
     let contents = match (from, emit) {
         (Format::Asm, Format::Hack) => {
-            hack_assembler::assemble(&source).map_err(|source| CliError::Assemble {
-                path: args.input.clone(),
-                source,
+            hack_assembler::assemble(&source).map_err(|source| match source {
+                hack_assembler::AssembleError::Parse(source) => CliError::AssembleParse {
+                    path: args.input.clone(),
+                    line: source.span.start.line,
+                    column: source.span.start.column,
+                    source,
+                },
+                hack_assembler::AssembleError::Codegen(source) => CliError::AssembleCodegen {
+                    path: args.input.clone(),
+                    source,
+                },
             })?
         }
         (Format::Vm, Format::Asm | Format::Hack) => {
@@ -143,13 +196,22 @@ fn run(args: Args) -> Result<PathBuf, CliError> {
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| CliError::InvalidVmFileName(args.input.clone()))?;
-            let instructions =
-                hack_vm_translator::translate(&source, file_name).map_err(|source| {
-                    CliError::Translate {
+            let instructions = hack_vm_translator::translate(&source, file_name).map_err(
+                |source| match source {
+                    hack_vm_translator::TranslateError::Parse(source) => CliError::TranslateParse {
                         path: args.input.clone(),
+                        line: source.span.start.line,
+                        column: source.span.start.column,
                         source,
+                    },
+                    hack_vm_translator::TranslateError::Codegen(source) => {
+                        CliError::TranslateCodegen {
+                            path: args.input.clone(),
+                            source,
+                        }
                     }
-                })?;
+                },
+            )?;
 
             if emit == Format::Asm {
                 hack_assembler::format_instructions(&instructions)
@@ -164,8 +226,7 @@ fn run(args: Args) -> Result<PathBuf, CliError> {
         }
         _ => unreachable!("supported routes were checked above"),
     };
-    let output = output_path(&args.input, args.output, emit);
-    fs::write(&output, contents).map_err(|source| CliError::Write {
+    write_atomically(&output, contents).map_err(|source| CliError::Write {
         path: output.clone(),
         source,
     })?;

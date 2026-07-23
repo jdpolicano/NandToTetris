@@ -1,11 +1,12 @@
 use crate::token::{Keyword, Token};
 use crate::vm::{Arithmetic, Segment};
+use hack_source::SourceSpan;
 use logos::{Lexer, Logos};
 use std::{fmt, fmt::Display};
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum ParseError {
+pub enum ParseErrorKind {
     #[error("unexpected token `{0}`")]
     UnexpectedToken(String),
     #[error("unexpected end of input")]
@@ -14,6 +15,25 @@ pub enum ParseError {
     InvalidWord(String),
     #[error("invalid number `{0}`")]
     InvalidNumber(String),
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[error("{kind}")]
+pub struct ParseError {
+    pub kind: ParseErrorKind,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+struct SpannedToken<'a> {
+    token: Token<'a>,
+    span: SourceSpan,
+}
+
+#[derive(Debug)]
+struct LexError {
+    text: String,
+    span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,26 +54,35 @@ impl Display for VmCommand {
 }
 
 pub struct Parser<'a> {
+    source: &'a str,
     tokenizer: Lexer<'a, Token<'a>>,
-    current: Option<Result<Token<'a>, ()>>,
+    current: Option<Result<SpannedToken<'a>, LexError>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(src: &'a str) -> Self {
         let mut tokenizer = Token::lexer(src);
-        let current = tokenizer.next();
-        Self { tokenizer, current }
+        let current = next_spanned(&mut tokenizer, src);
+        Self {
+            source: src,
+            tokenizer,
+            current,
+        }
     }
 
     pub fn parse_all(&mut self) -> Result<Vec<VmCommand>, ParseError> {
         let mut instructions = Vec::new();
         while let Some(begin) = self.next_token()? {
             match begin {
-                Token::Keyword(keyword) => instructions.push(self.parse_vm_command(keyword)?),
-                Token::Arithmetic(arithmetic) => {
-                    instructions.push(self.parse_vm_arithmetic(arithmetic)?)
-                }
-                _ => return Err(ParseError::UnexpectedToken(begin.to_string())),
+                SpannedToken {
+                    token: Token::Keyword(keyword),
+                    ..
+                } => instructions.push(self.parse_vm_command(keyword)?),
+                SpannedToken {
+                    token: Token::Arithmetic(arithmetic),
+                    ..
+                } => instructions.push(self.parse_vm_arithmetic(arithmetic)?),
+                token => return Err(self.unexpected(token)),
             }
             self.expect_line_end()?;
         }
@@ -63,17 +92,20 @@ impl<'a> Parser<'a> {
     fn parse_vm_command(&mut self, keyword: Keyword) -> Result<VmCommand, ParseError> {
         if let Some(next) = self.advance()? {
             match next {
-                Token::Segment(segment) => {
+                SpannedToken {
+                    token: Token::Segment(segment),
+                    ..
+                } => {
                     let index = self.expect_index()?;
                     match keyword {
                         Keyword::Pop => Ok(VmCommand::Pop { segment, index }),
                         Keyword::Push => Ok(VmCommand::Push { segment, index }),
                     }
                 }
-                _ => Err(ParseError::UnexpectedToken(next.to_string())),
+                token => Err(self.unexpected(token)),
             }
         } else {
-            Err(ParseError::UnexpectedEnd)
+            Err(self.error(ParseErrorKind::UnexpectedEnd, self.eof_span()))
         }
     }
 
@@ -82,67 +114,130 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_index(&mut self) -> Result<u16, ParseError> {
-        self.expect(|t| match t {
-            Some(Token::Number(num_str)) => {
-                let index = num_str
-                    .parse::<u16>()
-                    .map_err(|_| ParseError::InvalidNumber(num_str.to_string()))?;
+        match self.advance()? {
+            Some(SpannedToken {
+                token: Token::Number(num_str),
+                span,
+            }) => {
+                let index = num_str.parse::<u16>().map_err(|_| {
+                    self.error(ParseErrorKind::InvalidNumber(num_str.to_string()), span)
+                })?;
                 Ok(index)
             }
-            Some(token) => Err(ParseError::UnexpectedToken(token.to_string())),
-            None => Err(ParseError::UnexpectedEnd),
-        })
+            Some(token) => Err(self.unexpected(token)),
+            None => Err(self.error(ParseErrorKind::UnexpectedEnd, self.eof_span())),
+        }
     }
 
     fn expect_line_end(&mut self) -> Result<(), ParseError> {
-        self.expect(|token| match token {
-            Some(Token::Newline) | None => Ok(()),
-            Some(token) => Err(ParseError::UnexpectedToken(token.to_string())),
-        })
+        match self.advance()? {
+            Some(SpannedToken {
+                token: Token::Newline,
+                ..
+            })
+            | None => Ok(()),
+            Some(token) => Err(self.unexpected(token)),
+        }
     }
 
-    fn expect<T, F>(&mut self, f: F) -> Result<T, ParseError>
-    where
-        F: FnOnce(Option<Token<'a>>) -> Result<T, ParseError>,
-    {
-        f(self.advance()?)
-    }
-
-    fn next_token(&mut self) -> Result<Option<Token<'a>>, ParseError> {
+    fn next_token(&mut self) -> Result<Option<SpannedToken<'a>>, ParseError> {
         self.skip_newlines()?;
         self.advance()
     }
 
     fn skip_newlines(&mut self) -> Result<(), ParseError> {
-        while matches!(self.current.as_ref(), Some(Ok(Token::Newline))) {
+        while matches!(
+            self.current.as_ref(),
+            Some(Ok(SpannedToken {
+                token: Token::Newline,
+                ..
+            }))
+        ) {
             self.advance()?;
         }
         Ok(())
     }
 
-    fn advance(&mut self) -> Result<Option<Token<'a>>, ParseError> {
+    fn advance(&mut self) -> Result<Option<SpannedToken<'a>>, ParseError> {
         let token = self.current.take();
-        if token.as_ref().is_some_and(Result::is_err) {
-            return Err(ParseError::UnexpectedToken(
-                self.tokenizer.slice().to_string(),
-            ));
-        }
-
-        self.current = self.tokenizer.next();
+        self.current = next_spanned(&mut self.tokenizer, self.source);
         match token {
             Some(Ok(token)) => Ok(Some(token)),
             None => Ok(None),
-            Some(Err(())) => unreachable!("lexer errors return before advancing"),
+            Some(Err(error)) => {
+                Err(self.error(ParseErrorKind::UnexpectedToken(error.text), error.span))
+            }
         }
     }
+
+    fn error(&self, kind: ParseErrorKind, span: SourceSpan) -> ParseError {
+        ParseError { kind, span }
+    }
+    fn eof_span(&self) -> SourceSpan {
+        let position = self.tokenizer.extras.position();
+        if position.offset == self.source.len() {
+            SourceSpan::at(position)
+        } else {
+            SourceSpan::eof(self.source)
+        }
+    }
+    fn unexpected(&self, token: SpannedToken<'a>) -> ParseError {
+        self.error(
+            ParseErrorKind::UnexpectedToken(token.token.to_string()),
+            token.span,
+        )
+    }
+}
+
+fn next_spanned<'a>(
+    lexer: &mut Lexer<'a, Token<'a>>,
+    source: &'a str,
+) -> Option<Result<SpannedToken<'a>, LexError>> {
+    let result = match lexer.next() {
+        Some(result) => result,
+        None => {
+            lexer.extras.finish(source);
+            return None;
+        }
+    };
+    let range = lexer.span();
+    let span = lexer.extras.span_for(source, range);
+    Some(match result {
+        Ok(token) => Ok(SpannedToken { token, span }),
+        Err(()) => Err(LexError {
+            text: lexer.slice().to_string(),
+            span,
+        }),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse(input: &str) -> Result<Vec<VmCommand>, ParseError> {
-        Parser::new(input).parse_all()
+    fn parse(input: &str) -> Result<Vec<VmCommand>, ParseErrorKind> {
+        Parser::new(input).parse_all().map_err(|error| error.kind)
+    }
+
+    #[test]
+    fn reports_unicode_aware_source_spans_across_crlf() {
+        let source = "// first\r\npush 💥";
+        let error = Parser::new(source).parse_all().unwrap_err();
+        assert_eq!(
+            error.kind,
+            ParseErrorKind::UnexpectedToken("💥".to_string())
+        );
+        assert_eq!((error.span.start.line, error.span.start.column), (2, 6));
+        assert_eq!((error.span.end.line, error.span.end.column), (2, 7));
+        assert_eq!(&source[error.span.byte_range()], "💥");
+    }
+
+    #[test]
+    fn reports_zero_width_eof_spans() {
+        let source = "push constant";
+        let error = Parser::new(source).parse_all().unwrap_err();
+        assert_eq!(error.kind, ParseErrorKind::UnexpectedEnd);
+        assert_eq!(error.span, SourceSpan::eof(source));
     }
 
     #[test]
@@ -322,24 +417,24 @@ mod tests {
 
     #[test]
     fn reports_unexpected_end_after_push() {
-        assert_eq!(parse("push"), Err(ParseError::UnexpectedEnd));
+        assert_eq!(parse("push"), Err(ParseErrorKind::UnexpectedEnd));
     }
 
     #[test]
     fn reports_unexpected_end_after_pop() {
-        assert_eq!(parse("pop"), Err(ParseError::UnexpectedEnd));
+        assert_eq!(parse("pop"), Err(ParseErrorKind::UnexpectedEnd));
     }
 
     #[test]
     fn reports_unexpected_end_when_index_is_missing() {
-        assert_eq!(parse("push constant"), Err(ParseError::UnexpectedEnd));
+        assert_eq!(parse("push constant"), Err(ParseErrorKind::UnexpectedEnd));
     }
 
     #[test]
     fn reports_unexpected_token_when_segment_is_missing() {
         assert_eq!(
             parse("push 7"),
-            Err(ParseError::UnexpectedToken("7".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("7".to_string()))
         );
     }
 
@@ -347,7 +442,7 @@ mod tests {
     fn reports_unexpected_token_when_arithmetic_appears_as_segment() {
         assert_eq!(
             parse("push add 7"),
-            Err(ParseError::UnexpectedToken("add".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("add".to_string()))
         );
     }
 
@@ -355,7 +450,7 @@ mod tests {
     fn reports_unexpected_token_when_index_is_not_a_number() {
         assert_eq!(
             parse("push constant add"),
-            Err(ParseError::UnexpectedToken("add".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("add".to_string()))
         );
     }
 
@@ -363,11 +458,11 @@ mod tests {
     fn reports_unknown_word_at_command_position() {
         assert_eq!(
             parse("multiply"),
-            Err(ParseError::UnexpectedToken("multiply".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("multiply".to_string()))
         );
         assert_eq!(
             parse("💥"),
-            Err(ParseError::UnexpectedToken("💥".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("💥".to_string()))
         );
     }
 
@@ -375,7 +470,7 @@ mod tests {
     fn reports_unknown_word_as_segment() {
         assert_eq!(
             parse("push banana 1"),
-            Err(ParseError::UnexpectedToken("banana".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("banana".to_string()))
         );
     }
 
@@ -383,7 +478,7 @@ mod tests {
     fn reports_unknown_word_as_index() {
         assert_eq!(
             parse("push constant banana"),
-            Err(ParseError::UnexpectedToken("banana".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("banana".to_string()))
         );
     }
 
@@ -391,7 +486,7 @@ mod tests {
     fn rejects_negative_index() {
         assert_eq!(
             parse("push constant -25"),
-            Err(ParseError::UnexpectedToken("-25".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("-25".to_string()))
         );
     }
 
@@ -399,7 +494,7 @@ mod tests {
     fn rejects_number_larger_than_u16() {
         assert_eq!(
             parse("push constant 65536"),
-            Err(ParseError::InvalidNumber("65536".to_string()))
+            Err(ParseErrorKind::InvalidNumber("65536".to_string()))
         );
     }
 
@@ -423,7 +518,7 @@ mod tests {
                 push banana 2\n\
                 add"
             ),
-            Err(ParseError::UnexpectedToken("banana".to_string()))
+            Err(ParseErrorKind::UnexpectedToken("banana".to_string()))
         );
     }
 }
