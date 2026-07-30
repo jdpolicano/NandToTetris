@@ -1,0 +1,12 @@
+[package]
+name = "hack-assembler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hack-source = { version = "0.1.0", path = "../hack-source" }
+logos = "0.16.1"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
