@@ -239,6 +239,9 @@ dependencies = [
 [[package]]
 name = "hack-source"
 version = "0.1.0"
+dependencies = [
+ "logos",
+]
 
 [[package]]
 name = "hack-vm-translator"

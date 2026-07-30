@@ -2,8 +2,7 @@ use crate::instruction::{
     AValue, Comp, Dest, Instruction, InstructionError, Jump, predefined_symbol, validate_symbol,
 };
 use crate::token::Token;
-use hack_source::SourceSpan;
-use logos::{Lexer, Logos};
+use hack_source::{LexError, SourceSpan, Spanned, SpannedLexer};
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -31,35 +30,19 @@ pub struct ParseError {
     pub span: SourceSpan,
 }
 
-#[derive(Debug, Clone)]
-struct SpannedToken<'a> {
-    token: Token<'a>,
-    span: SourceSpan,
-}
-
-#[derive(Debug)]
-struct LexError {
-    text: String,
-    span: SourceSpan,
-}
+type SpannedToken<'a> = Spanned<Token<'a>>;
 
 pub struct Parser<'a> {
-    source: &'a str,
-    tokenizer: Lexer<'a, Token<'a>>,
+    tokenizer: SpannedLexer<'a, Token<'a>>,
     current: Option<Result<SpannedToken<'a>, LexError>>,
 }
 
 impl<'a> Parser<'a> {
     /// Creates a parser over the provided Hack assembly source.
     pub fn new(input: &'a str) -> Self {
-        let mut tokenizer = Token::lexer(input);
-        let current = next_spanned(&mut tokenizer, input);
-
-        Self {
-            source: input,
-            tokenizer,
-            current,
-        }
+        let mut tokenizer = SpannedLexer::new(input);
+        let current = tokenizer.next();
+        Self { tokenizer, current }
     }
 
     /// Parses the full input into instructions, skipping blank lines.
@@ -80,10 +63,10 @@ impl<'a> Parser<'a> {
     fn parse_instruction(&mut self) -> Result<Instruction, ParseError> {
         match self.advance()? {
             Some(SpannedToken {
-                token: Token::At, ..
+                value: Token::At, ..
             }) => self.parse_a_instruction(),
             Some(SpannedToken {
-                token: Token::OpenParen,
+                value: Token::OpenParen,
                 ..
             }) => self.parse_label(),
             Some(token) => self.parse_c_instruction(token),
@@ -95,22 +78,22 @@ impl<'a> Parser<'a> {
         let value = match self.advance()? {
             Some(
                 token @ SpannedToken {
-                    token: Token::Number(_),
+                    value: Token::Number(_),
                     ..
                 },
             ) => {
-                let Token::Number(value) = token.token else {
+                let Token::Number(value) = token.value else {
                     unreachable!()
                 };
                 parse_a_number(value).map_err(|kind| self.error(kind, token.span))?
             }
             Some(
                 token @ SpannedToken {
-                    token: Token::Identifier(_),
+                    value: Token::Identifier(_),
                     ..
                 },
             ) => {
-                let Token::Identifier(value) = token.token else {
+                let Token::Identifier(value) = token.value else {
                     unreachable!()
                 };
                 parse_a_symbol(value).map_err(|kind| self.error(kind, token.span))?
@@ -126,7 +109,7 @@ impl<'a> Parser<'a> {
     fn parse_label(&mut self) -> Result<Instruction, ParseError> {
         let (label, label_span) = match self.advance()? {
             Some(SpannedToken {
-                token: Token::Identifier(value),
+                value: Token::Identifier(value),
                 span,
             }) => (value, span),
             Some(token) => return Err(self.unexpected(token)),
@@ -147,19 +130,19 @@ impl<'a> Parser<'a> {
 
         match self.peek()? {
             Some(SpannedToken {
-                token: Token::Eq, ..
+                value: Token::Eq, ..
             }) => self.parse_assignment(&first),
             Some(SpannedToken {
-                token: Token::SemiColon,
+                value: Token::SemiColon,
                 ..
             }) => self.parse_jump_instruction(&first),
             Some(SpannedToken {
-                token: Token::Newline,
+                value: Token::Newline,
                 ..
             })
             | None => self.parse_bare_comp(&first),
             Some(token) => Err(self.error(
-                ParseErrorKind::UnexpectedToken(token_to_string(&token.token)),
+                ParseErrorKind::UnexpectedToken(token_to_string(&token.value)),
                 token.span,
             )),
         }
@@ -250,7 +233,7 @@ impl<'a> Parser<'a> {
         loop {
             match self.peek()? {
                 Some(SpannedToken {
-                    token: Token::Eq | Token::SemiColon | Token::Newline,
+                    value: Token::Eq | Token::SemiColon | Token::Newline,
                     ..
                 })
                 | None => {
@@ -269,7 +252,7 @@ impl<'a> Parser<'a> {
     /// Consumes the current token if it is the expected terminal variant.
     fn expect(&mut self, expected: Token<'_>) -> Result<(), ParseError> {
         match self.advance()? {
-            Some(token) if same_token_variant(&token.token, &expected) => Ok(()),
+            Some(token) if same_token_variant(&token.value, &expected) => Ok(()),
             Some(token) => Err(self.unexpected(token)),
             None => Err(self.error(ParseErrorKind::UnexpectedEnd, self.eof_span())),
         }
@@ -278,7 +261,7 @@ impl<'a> Parser<'a> {
     fn expect_newline_or_end(&mut self) -> Result<(), ParseError> {
         match self.advance()? {
             Some(SpannedToken {
-                token: Token::Newline,
+                value: Token::Newline,
                 ..
             })
             | None => Ok(()),
@@ -291,7 +274,7 @@ impl<'a> Parser<'a> {
         while matches!(
             self.current.as_ref(),
             Some(Ok(SpannedToken {
-                token: Token::Newline,
+                value: Token::Newline,
                 ..
             }))
         ) {
@@ -303,13 +286,11 @@ impl<'a> Parser<'a> {
     /// Consumes and returns the current token, then advances one token ahead.
     fn advance(&mut self) -> Result<Option<SpannedToken<'a>>, ParseError> {
         let token = self.current.take();
-        self.current = next_spanned(&mut self.tokenizer, self.source);
+        self.current = self.tokenizer.next();
         match token {
             Some(Ok(token)) => Ok(Some(token)),
             None => Ok(None),
-            Some(Err(error)) => {
-                Err(self.error(ParseErrorKind::UnexpectedToken(error.text), error.span))
-            }
+            Some(Err(error)) => Err(self.lexical_error(&error)),
         }
     }
 
@@ -317,10 +298,7 @@ impl<'a> Parser<'a> {
         match self.current.as_ref() {
             Some(Ok(token)) => Ok(Some(token)),
             None => Ok(None),
-            Some(Err(error)) => Err(self.error(
-                ParseErrorKind::UnexpectedToken(error.text.clone()),
-                error.span,
-            )),
+            Some(Err(error)) => Err(self.lexical_error(error)),
         }
     }
 
@@ -328,12 +306,7 @@ impl<'a> Parser<'a> {
         self.peek().map(|_| ())
     }
     fn eof_span(&self) -> SourceSpan {
-        let position = self.tokenizer.extras.position();
-        if position.offset == self.source.len() {
-            SourceSpan::at(position)
-        } else {
-            SourceSpan::eof(self.source)
-        }
+        self.tokenizer.eof_span()
     }
     fn component_span(&self, tokens: &[SpannedToken<'_>]) -> SourceSpan {
         match (tokens.first(), tokens.last()) {
@@ -344,9 +317,15 @@ impl<'a> Parser<'a> {
     fn error(&self, kind: ParseErrorKind, span: SourceSpan) -> ParseError {
         ParseError { kind, span }
     }
+    fn lexical_error(&self, error: &LexError) -> ParseError {
+        self.error(
+            ParseErrorKind::UnexpectedToken(error.text.clone()),
+            error.span,
+        )
+    }
     fn unexpected(&self, token: SpannedToken<'a>) -> ParseError {
         self.error(
-            ParseErrorKind::UnexpectedToken(token_to_string(&token.token)),
+            ParseErrorKind::UnexpectedToken(token_to_string(&token.value)),
             token.span,
         )
     }
@@ -449,43 +428,43 @@ fn parse_dest(tokens: &[SpannedToken<'_>]) -> Result<Dest, ParseErrorKind> {
     match tokens {
         [
             SpannedToken {
-                token: Token::Identifier("M"),
+                value: Token::Identifier("M"),
                 ..
             },
         ] => Ok(Dest::M),
         [
             SpannedToken {
-                token: Token::Identifier("D"),
+                value: Token::Identifier("D"),
                 ..
             },
         ] => Ok(Dest::D),
         [
             SpannedToken {
-                token: Token::Identifier("MD"),
+                value: Token::Identifier("MD"),
                 ..
             },
         ] => Ok(Dest::MD),
         [
             SpannedToken {
-                token: Token::Identifier("A"),
+                value: Token::Identifier("A"),
                 ..
             },
         ] => Ok(Dest::A),
         [
             SpannedToken {
-                token: Token::Identifier("AM"),
+                value: Token::Identifier("AM"),
                 ..
             },
         ] => Ok(Dest::AM),
         [
             SpannedToken {
-                token: Token::Identifier("AD"),
+                value: Token::Identifier("AD"),
                 ..
             },
         ] => Ok(Dest::AD),
         [
             SpannedToken {
-                token: Token::Identifier("AMD"),
+                value: Token::Identifier("AMD"),
                 ..
             },
         ] => Ok(Dest::AMD),
@@ -494,7 +473,7 @@ fn parse_dest(tokens: &[SpannedToken<'_>]) -> Result<Dest, ParseErrorKind> {
 }
 
 fn parse_comp(tokens: &[SpannedToken<'_>]) -> Result<Comp, ParseErrorKind> {
-    let bare: Vec<_> = tokens.iter().map(|token| token.token).collect();
+    let bare: Vec<_> = tokens.iter().map(|token| token.value).collect();
     let comp = match bare.as_slice() {
         [Token::Number("0")] => Comp::Zero,
         [Token::Number("1")] => Comp::One,
@@ -531,7 +510,7 @@ fn parse_comp(tokens: &[SpannedToken<'_>]) -> Result<Comp, ParseErrorKind> {
 }
 
 fn parse_jump(tokens: &[SpannedToken<'_>]) -> Result<Jump, ParseErrorKind> {
-    let bare: Vec<_> = tokens.iter().map(|token| token.token).collect();
+    let bare: Vec<_> = tokens.iter().map(|token| token.value).collect();
     match bare.as_slice() {
         [Token::Identifier("JGT")] => Ok(Jump::Jgt),
         [Token::Identifier("JEQ")] => Ok(Jump::Jeq),
@@ -544,8 +523,8 @@ fn parse_jump(tokens: &[SpannedToken<'_>]) -> Result<Jump, ParseErrorKind> {
     }
 }
 
-fn token_to_string(token: &Token<'_>) -> String {
-    match token {
+fn token_to_string(value: &Token<'_>) -> String {
+    match value {
         Token::Number(value) | Token::Identifier(value) => value.to_string(),
         Token::SemiColon => ";".to_string(),
         Token::OpenParen => "(".to_string(),
@@ -564,7 +543,7 @@ fn token_to_string(token: &Token<'_>) -> String {
 fn component_text(tokens: &[SpannedToken<'_>]) -> String {
     tokens
         .iter()
-        .map(|token| token_to_string(&token.token))
+        .map(|token| token_to_string(&token.value))
         .collect()
 }
 
@@ -579,28 +558,6 @@ fn invalid_symbol(error: InstructionError) -> ParseErrorKind {
             unreachable!("symbol validation cannot produce an address error")
         }
     }
-}
-
-fn next_spanned<'a>(
-    lexer: &mut Lexer<'a, Token<'a>>,
-    source: &'a str,
-) -> Option<Result<SpannedToken<'a>, LexError>> {
-    let result = match lexer.next() {
-        Some(result) => result,
-        None => {
-            lexer.extras.finish(source);
-            return None;
-        }
-    };
-    let range = lexer.span();
-    let span = lexer.extras.span_for(source, range);
-    Some(match result {
-        Ok(token) => Ok(SpannedToken { token, span }),
-        Err(()) => Err(LexError {
-            text: lexer.slice().to_string(),
-            span,
-        }),
-    })
 }
 
 #[cfg(test)]

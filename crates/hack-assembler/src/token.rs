@@ -44,6 +44,7 @@ pub enum Token<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hack_source::SpannedLexer;
     use proptest::prelude::*;
 
     proptest! {
@@ -54,15 +55,15 @@ mod tests {
             input in prop::collection::vec(any::<char>(), 0..=2048)
                 .prop_map(|characters| characters.into_iter().collect::<String>())
         ) {
-            let _: Vec<_> = Token::lexer(&input).collect();
+            let _: Vec<_> = SpannedLexer::<Token<'_>>::new(&input).collect();
         }
     }
 
     fn tokens(input: &str) -> Result<Vec<Token<'_>>, ()> {
         let mut tokens = Vec::new();
 
-        for token in Token::lexer(input) {
-            tokens.push(token?);
+        for token in SpannedLexer::<Token<'_>>::new(input) {
+            tokens.push(token.map_err(|_| ())?.value);
         }
 
         Ok(tokens)

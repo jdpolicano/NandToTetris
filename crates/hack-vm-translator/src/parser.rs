@@ -1,7 +1,6 @@
 use crate::token::{Keyword, Token};
 use crate::vm::{Arithmetic, Segment};
-use hack_source::SourceSpan;
-use logos::{Lexer, Logos};
+use hack_source::{LexError, SourceSpan, Spanned, SpannedLexer};
 use std::{fmt, fmt::Display};
 use thiserror::Error;
 
@@ -24,17 +23,7 @@ pub struct ParseError {
     pub span: SourceSpan,
 }
 
-#[derive(Debug, Clone)]
-struct SpannedToken<'a> {
-    token: Token<'a>,
-    span: SourceSpan,
-}
-
-#[derive(Debug)]
-struct LexError {
-    text: String,
-    span: SourceSpan,
-}
+type SpannedToken<'a> = Spanned<Token<'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmCommand {
@@ -54,20 +43,15 @@ impl Display for VmCommand {
 }
 
 pub struct Parser<'a> {
-    source: &'a str,
-    tokenizer: Lexer<'a, Token<'a>>,
+    tokenizer: SpannedLexer<'a, Token<'a>>,
     current: Option<Result<SpannedToken<'a>, LexError>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(src: &'a str) -> Self {
-        let mut tokenizer = Token::lexer(src);
-        let current = next_spanned(&mut tokenizer, src);
-        Self {
-            source: src,
-            tokenizer,
-            current,
-        }
+        let mut tokenizer = SpannedLexer::new(src);
+        let current = tokenizer.next();
+        Self { tokenizer, current }
     }
 
     pub fn parse_all(&mut self) -> Result<Vec<VmCommand>, ParseError> {
@@ -75,11 +59,11 @@ impl<'a> Parser<'a> {
         while let Some(begin) = self.next_token()? {
             match begin {
                 SpannedToken {
-                    token: Token::Keyword(keyword),
+                    value: Token::Keyword(keyword),
                     ..
                 } => instructions.push(self.parse_vm_command(keyword)?),
                 SpannedToken {
-                    token: Token::Arithmetic(arithmetic),
+                    value: Token::Arithmetic(arithmetic),
                     ..
                 } => instructions.push(self.parse_vm_arithmetic(arithmetic)?),
                 token => return Err(self.unexpected(token)),
@@ -93,7 +77,7 @@ impl<'a> Parser<'a> {
         if let Some(next) = self.advance()? {
             match next {
                 SpannedToken {
-                    token: Token::Segment(segment),
+                    value: Token::Segment(segment),
                     ..
                 } => {
                     let index = self.expect_index()?;
@@ -116,7 +100,7 @@ impl<'a> Parser<'a> {
     fn expect_index(&mut self) -> Result<u16, ParseError> {
         match self.advance()? {
             Some(SpannedToken {
-                token: Token::Number(num_str),
+                value: Token::Number(num_str),
                 span,
             }) => {
                 let index = num_str.parse::<u16>().map_err(|_| {
@@ -132,7 +116,7 @@ impl<'a> Parser<'a> {
     fn expect_line_end(&mut self) -> Result<(), ParseError> {
         match self.advance()? {
             Some(SpannedToken {
-                token: Token::Newline,
+                value: Token::Newline,
                 ..
             })
             | None => Ok(()),
@@ -149,7 +133,7 @@ impl<'a> Parser<'a> {
         while matches!(
             self.current.as_ref(),
             Some(Ok(SpannedToken {
-                token: Token::Newline,
+                value: Token::Newline,
                 ..
             }))
         ) {
@@ -160,55 +144,32 @@ impl<'a> Parser<'a> {
 
     fn advance(&mut self) -> Result<Option<SpannedToken<'a>>, ParseError> {
         let token = self.current.take();
-        self.current = next_spanned(&mut self.tokenizer, self.source);
+        self.current = self.tokenizer.next();
         match token {
             Some(Ok(token)) => Ok(Some(token)),
             None => Ok(None),
-            Some(Err(error)) => {
-                Err(self.error(ParseErrorKind::UnexpectedToken(error.text), error.span))
-            }
+            Some(Err(error)) => Err(self.lexical_error(&error)),
         }
     }
 
     fn error(&self, kind: ParseErrorKind, span: SourceSpan) -> ParseError {
         ParseError { kind, span }
     }
+    fn lexical_error(&self, error: &LexError) -> ParseError {
+        self.error(
+            ParseErrorKind::UnexpectedToken(error.text.clone()),
+            error.span,
+        )
+    }
     fn eof_span(&self) -> SourceSpan {
-        let position = self.tokenizer.extras.position();
-        if position.offset == self.source.len() {
-            SourceSpan::at(position)
-        } else {
-            SourceSpan::eof(self.source)
-        }
+        self.tokenizer.eof_span()
     }
     fn unexpected(&self, token: SpannedToken<'a>) -> ParseError {
         self.error(
-            ParseErrorKind::UnexpectedToken(token.token.to_string()),
+            ParseErrorKind::UnexpectedToken(token.value.to_string()),
             token.span,
         )
     }
-}
-
-fn next_spanned<'a>(
-    lexer: &mut Lexer<'a, Token<'a>>,
-    source: &'a str,
-) -> Option<Result<SpannedToken<'a>, LexError>> {
-    let result = match lexer.next() {
-        Some(result) => result,
-        None => {
-            lexer.extras.finish(source);
-            return None;
-        }
-    };
-    let range = lexer.span();
-    let span = lexer.extras.span_for(source, range);
-    Some(match result {
-        Ok(token) => Ok(SpannedToken { token, span }),
-        Err(()) => Err(LexError {
-            text: lexer.slice().to_string(),
-            span,
-        }),
-    })
 }
 
 #[cfg(test)]

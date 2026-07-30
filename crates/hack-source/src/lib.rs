@@ -1,5 +1,6 @@
 //! Shared source-location types for Hack language tooling.
 
+use logos::{Lexer, Logos};
 use std::ops::Range;
 
 /// A Unicode-aware, one-based location in source text.
@@ -20,6 +21,74 @@ pub struct SourceSpan {
     pub start: SourcePosition,
     /// Exclusive end position of the span.
     pub end: SourcePosition,
+}
+
+/// A value paired with the source range that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Spanned<T> {
+    pub value: T,
+    pub span: SourceSpan,
+}
+
+/// A tokenization failure paired with the source range that failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexError {
+    pub text: String,
+    pub span: SourceSpan,
+}
+
+/// A Logos lexer adapter that emits source-spanned tokens and lexical errors.
+///
+/// Token types must use [`PositionTracker`] as their Logos extras and the
+/// default unit error type.
+pub struct SpannedLexer<'source, Token>
+where
+    Token: Logos<'source, Source = str, Extras = PositionTracker, Error = ()>,
+{
+    source: &'source str,
+    lexer: Lexer<'source, Token>,
+}
+
+impl<'source, Token> SpannedLexer<'source, Token>
+where
+    Token: Logos<'source, Source = str, Extras = PositionTracker, Error = ()>,
+{
+    pub fn new(source: &'source str) -> Self {
+        Self {
+            source,
+            lexer: Token::lexer(source),
+        }
+    }
+
+    pub fn eof_span(&self) -> SourceSpan {
+        SourceSpan::at(self.lexer.extras.position())
+    }
+}
+
+impl<'source, Token> Iterator for SpannedLexer<'source, Token>
+where
+    Token: Logos<'source, Source = str, Extras = PositionTracker, Error = ()>,
+{
+    type Item = Result<Spanned<Token>, LexError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = match self.lexer.next() {
+            Some(result) => result,
+            None => {
+                self.lexer.extras.finish(self.source);
+                return None;
+            }
+        };
+        let span = self.lexer.extras.span_for(self.source, self.lexer.span());
+
+        Some(match result {
+            Ok(value) => Ok(Spanned { value, span }),
+            Err(()) => Err(LexError {
+                text: self.lexer.slice().to_string(),
+                span,
+            }),
+        })
+    }
 }
 
 impl SourceSpan {
@@ -158,6 +227,38 @@ fn position_at(source: &str, offset: usize) -> SourcePosition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use logos::Logos;
+
+    #[derive(Logos, Debug, PartialEq, Eq)]
+    #[logos(extras = PositionTracker)]
+    #[logos(skip r"[^\S\n]")]
+    enum TestToken<'a> {
+        #[regex("[a-z]+", |lexer| lexer.slice())]
+        Word(&'a str),
+        #[token("\n")]
+        Newline,
+    }
+
+    #[test]
+    fn spanned_lexer_owns_token_error_and_eof_locations() {
+        let source = "  hi\n💥";
+        let mut lexer = SpannedLexer::<TestToken<'_>>::new(source);
+
+        let word = lexer.next().unwrap().unwrap();
+        assert_eq!(word.value, TestToken::Word("hi"));
+        assert_eq!((word.span.start.line, word.span.start.column), (1, 3));
+
+        let newline = lexer.next().unwrap().unwrap();
+        assert_eq!(newline.value, TestToken::Newline);
+
+        let error = lexer.next().unwrap().unwrap_err();
+        assert_eq!(error.text, "💥");
+        assert_eq!((error.span.start.line, error.span.start.column), (2, 1));
+        assert_eq!((error.span.end.line, error.span.end.column), (2, 2));
+
+        assert!(lexer.next().is_none());
+        assert_eq!(lexer.eof_span(), SourceSpan::eof(source));
+    }
 
     #[test]
     fn maps_unicode_and_newlines() {
